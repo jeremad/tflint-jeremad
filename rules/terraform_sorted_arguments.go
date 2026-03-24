@@ -11,13 +11,13 @@ import (
 
 // Argument categories — items must appear in non-decreasing order within a block.
 //
-//  0  provider                 the `provider` attribute
-//  1  instantiation meta-args  `count`, `for_each`
-//  2  source                   the `source` attribute (modules)
-//  3  primitives               bool/number/string scalars, references, function calls
-//  4  complex                  list `[…]` or map `{…}` values
-//  5  nested blocks            HCL sub-blocks (lifecycle/depends_on excluded)
-//  6  lifecycle meta-args      `lifecycle` block, `depends_on`, etc.
+//	0  provider                 the `provider` attribute
+//	1  instantiation meta-args  `count`, `for_each`
+//	2  source                   the `source` attribute (modules)
+//	3  primitives               bool/number/string scalars, references, function calls
+//	4  complex                  list `[…]` or map `{…}` values
+//	5  nested blocks            HCL sub-blocks (lifecycle/depends_on excluded)
+//	6  lifecycle meta-args      `lifecycle` block, `depends_on`, etc.
 const (
 	catProvider      = 0
 	catInstantiation = 1
@@ -88,7 +88,7 @@ type bodyItem struct {
 }
 
 func collectBodyItems(body *hclsyntax.Body) []bodyItem {
-	var items []bodyItem
+	items := make([]bodyItem, 0, len(body.Attributes)+len(body.Blocks))
 
 	for name, attr := range body.Attributes {
 		r := attr.Range()
