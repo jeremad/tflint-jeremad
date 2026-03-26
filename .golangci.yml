@@ -1,0 +1,21 @@
+linters:
+  enable:
+    - prealloc
+    - revive
+    - govet
+    - staticcheck
+    - errcheck
+    - gosimple
+    - ineffassign
+    - unused
+    - misspell
+    - gofmt
+    - goimports
+
+linters-settings:
+  revive:
+    rules:
+      - name: exported
+        severity: warning
+  goimports:
+    local-prefixes: github.com/jeremad/tflint-ruleset-jeremad
