@@ -1,9 +1,10 @@
 package main
 
 import (
-	"github.com/jeremad/tflint-ruleset-jeremad/rules"
 	"github.com/terraform-linters/tflint-plugin-sdk/plugin"
 	"github.com/terraform-linters/tflint-plugin-sdk/tflint"
+
+	"github.com/jeremad/tflint-ruleset-jeremad/rules"
 )
 
 func main() {
