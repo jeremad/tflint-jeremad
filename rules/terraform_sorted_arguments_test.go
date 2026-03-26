@@ -581,6 +581,266 @@ resource "aws_instance" "web" {
 `,
 			issues: helper.Issues{},
 		},
+
+		// ── Edge cases: empty / single-item blocks ──────────────────────────────
+		{
+			name: "empty block - no issues",
+			config: `
+resource "aws_instance" "web" {
+}
+`,
+			issues: helper.Issues{},
+		},
+		{
+			name: "single argument block - no issues",
+			config: `
+resource "aws_instance" "web" {
+  ami = "ami-a1b2c3d4"
+}
+`,
+			issues: helper.Issues{},
+		},
+
+		// ── Multiple violations in one block ────────────────────────────────────
+		{
+			name: "multiple violations in same block - all reported",
+			config: `
+resource "aws_instance" "web" {
+  tags          = { Name = "web" }
+  instance_type = "t2.micro"
+  ami           = "ami-a1b2c3d4"
+}
+`,
+			issues: helper.Issues{
+				{
+					Rule: rule,
+					Message: `argument "instance_type" (primitive variable) should come before "tags" (complex variable (list/map)): ` +
+						orderingHint,
+					Range: hcl.Range{
+						Filename: "main.tf",
+						Start:    hcl.Pos{Line: 4, Column: 3},
+						End:      hcl.Pos{Line: 4, Column: 16},
+					},
+				},
+				{
+					Rule:    rule,
+					Message: `argument "ami" is not sorted: it should come before "instance_type"`,
+					Range: hcl.Range{
+						Filename: "main.tf",
+						Start:    hcl.Pos{Line: 5, Column: 3},
+						End:      hcl.Pos{Line: 5, Column: 6},
+					},
+				},
+			},
+		},
+
+		// ── Multiple resource blocks in same file ────────────────────────────────
+		{
+			name: "two resource blocks both checked independently",
+			config: `
+resource "aws_instance" "web" {
+  instance_type = "t2.micro"
+  ami           = "ami-a1b2c3d4"
+}
+
+resource "aws_instance" "db" {
+  instance_type = "t2.micro"
+  ami           = "ami-a1b2c3d4"
+}
+`,
+			issues: helper.Issues{
+				{
+					Rule:    rule,
+					Message: `argument "ami" is not sorted: it should come before "instance_type"`,
+					Range: hcl.Range{
+						Filename: "main.tf",
+						Start:    hcl.Pos{Line: 4, Column: 3},
+						End:      hcl.Pos{Line: 4, Column: 6},
+					},
+				},
+				{
+					Rule:    rule,
+					Message: `argument "ami" is not sorted: it should come before "instance_type"`,
+					Range: hcl.Range{
+						Filename: "main.tf",
+						Start:    hcl.Pos{Line: 9, Column: 3},
+						End:      hcl.Pos{Line: 9, Column: 6},
+					},
+				},
+			},
+		},
+
+		// ── count + for_each alphabetical ordering ───────────────────────────────
+		{
+			name: "count before for_each - no issues (alphabetical within catInstantiation)",
+			config: `
+resource "aws_instance" "web" {
+  count    = 2
+  for_each = toset(["a"])
+
+  ami = "ami-a1b2c3d4"
+}
+`,
+			issues: helper.Issues{},
+		},
+		{
+			name: "for_each before count - sort violation within catInstantiation",
+			config: `
+resource "aws_instance" "web" {
+  for_each = toset(["a"])
+  count    = 2
+}
+`,
+			issues: helper.Issues{
+				{
+					Rule:    rule,
+					Message: `argument "count" is not sorted: it should come before "for_each"`,
+					Range: hcl.Range{
+						Filename: "main.tf",
+						Start:    hcl.Pos{Line: 4, Column: 3},
+						End:      hcl.Pos{Line: 4, Column: 8},
+					},
+				},
+			},
+		},
+
+		// ── provider + count blank line ──────────────────────────────────────────
+		{
+			name: "provider then count with blank line - no issues",
+			config: `
+resource "aws_instance" "web" {
+  provider = aws.us_east
+
+  count = 2
+
+  ami = "ami-a1b2c3d4"
+}
+`,
+			issues: helper.Issues{},
+		},
+		{
+			name: "provider then count without blank line - blank line violation",
+			config: `
+resource "aws_instance" "web" {
+  provider = aws.us_east
+  count    = 2
+
+  ami = "ami-a1b2c3d4"
+}
+`,
+			issues: helper.Issues{
+				{
+					Rule:    rule,
+					Message: `missing blank line before "count" (instantiation meta-argument (count/for_each))`,
+					Range: hcl.Range{
+						Filename: "main.tf",
+						Start:    hcl.Pos{Line: 4, Column: 3},
+						End:      hcl.Pos{Line: 4, Column: 8},
+					},
+				},
+			},
+		},
+
+		// ── Three+ primitives: transitivity ─────────────────────────────────────
+		{
+			name: "three primitives sorted - no issues",
+			config: `
+resource "aws_instance" "web" {
+  ami           = "ami-a1b2c3d4"
+  instance_type = "t2.micro"
+  subnet_id     = "subnet-abc"
+}
+`,
+			issues: helper.Issues{},
+		},
+		{
+			name: "three primitives unsorted middle - sort violation",
+			config: `
+resource "aws_instance" "web" {
+  ami           = "ami-a1b2c3d4"
+  subnet_id     = "subnet-abc"
+  instance_type = "t2.micro"
+}
+`,
+			issues: helper.Issues{
+				{
+					Rule:    rule,
+					Message: `argument "instance_type" is not sorted: it should come before "subnet_id"`,
+					Range: hcl.Range{
+						Filename: "main.tf",
+						Start:    hcl.Pos{Line: 5, Column: 3},
+						End:      hcl.Pos{Line: 5, Column: 16},
+					},
+				},
+			},
+		},
+
+		// ── Module: source + for_each blank line ─────────────────────────────────
+		{
+			name: "module for_each then source with blank line - no issues",
+			config: `
+module "database" {
+  for_each = toset(["a", "b"])
+
+  source = "../modules/database"
+
+  db_size = 10
+}
+`,
+			issues: helper.Issues{},
+		},
+		{
+			name: "module for_each then source without blank line - blank line violation",
+			config: `
+module "database" {
+  for_each = toset(["a", "b"])
+  source   = "../modules/database"
+
+  db_size = 10
+}
+`,
+			issues: helper.Issues{
+				{
+					Rule:    rule,
+					Message: `missing blank line before "source" (source)`,
+					Range: hcl.Range{
+						Filename: "main.tf",
+						Start:    hcl.Pos{Line: 4, Column: 3},
+						End:      hcl.Pos{Line: 4, Column: 9},
+					},
+				},
+			},
+		},
+
+		// ── Deeply nested blocks (3 levels) ─────────────────────────────────────
+		{
+			name: "three levels of nesting - inner violation reported",
+			config: `
+resource "aws_instance" "web" {
+  ami = "ami-a1b2c3d4"
+
+  root_block_device {
+    volume_size = 20
+
+    nested_deep {
+      z_attr = "z"
+      a_attr = "a"
+    }
+  }
+}
+`,
+			issues: helper.Issues{
+				{
+					Rule:    rule,
+					Message: `argument "a_attr" is not sorted: it should come before "z_attr"`,
+					Range: hcl.Range{
+						Filename: "main.tf",
+						Start:    hcl.Pos{Line: 10, Column: 7},
+						End:      hcl.Pos{Line: 10, Column: 13},
+					},
+				},
+			},
+		},
 	}
 
 	for _, tc := range cases {
