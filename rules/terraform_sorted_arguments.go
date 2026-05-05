@@ -1,8 +1,10 @@
 package rules
 
 import (
+	"errors"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclsyntax"
@@ -85,6 +87,7 @@ type bodyItem struct {
 	startLine int
 	endLine   int
 	nameRange hcl.Range
+	fullRange hcl.Range
 }
 
 func collectBodyItems(body *hclsyntax.Body) []bodyItem {
@@ -98,6 +101,11 @@ func collectBodyItems(body *hclsyntax.Body) []bodyItem {
 			startLine: r.Start.Line,
 			endLine:   r.End.Line,
 			nameRange: attr.NameRange,
+			fullRange: hcl.Range{
+				Filename: attr.NameRange.Filename,
+				Start:    attr.NameRange.Start,
+				End:      attr.Expr.Range().End,
+			},
 		})
 	}
 
@@ -109,6 +117,11 @@ func collectBodyItems(body *hclsyntax.Body) []bodyItem {
 			startLine: r.Start.Line,
 			endLine:   r.End.Line,
 			nameRange: block.TypeRange,
+			fullRange: hcl.Range{
+				Filename: block.TypeRange.Filename,
+				Start:    block.TypeRange.Start,
+				End:      block.CloseBraceRange.End,
+			},
 		})
 	}
 
@@ -123,15 +136,27 @@ func collectBodyItems(body *hclsyntax.Body) []bodyItem {
 //
 // Rules:
 //   - Any forward category transition requires a blank line.
+//   - Consecutive complex variables (lists/maps) each require a blank line.
 //   - Consecutive different-type nested blocks require a blank line.
 //   - Consecutive lifecycle meta-arguments each require their own blank line.
 func needsBlankLineBefore(item, prev bodyItem) bool {
+	if item.name == "content" {
+		return false
+	}
 	if item.category > prev.category {
+		if prev.category <= catSource && item.category <= catSource {
+			return false
+		}
 		return true
 	}
 	if item.category == prev.category {
 		switch item.category {
+		case catComplex:
+			return true
 		case catBlock:
+			if item.name == "dynamic" {
+				return true
+			}
 			return item.name != prev.name
 		case catLifecycle:
 			return true
