@@ -58,6 +58,15 @@ var endMetaNames = map[string]bool{
 	"lifecycle":  true,
 }
 
+var complexFuncs = map[string]bool{
+	"compact":      true,
+	"concat":       true,
+	"jsonencode":   true,
+	"merge":        true,
+	"templatefile": true,
+	"toset":        true,
+}
+
 func categorizeAttr(name string, expr hclsyntax.Expression) int {
 	if cat, ok := topMetaAttrs[name]; ok {
 		return cat
@@ -65,10 +74,19 @@ func categorizeAttr(name string, expr hclsyntax.Expression) int {
 	if endMetaNames[name] {
 		return catLifecycle
 	}
-	switch expr.(type) {
-	case *hclsyntax.ObjectConsExpr, *hclsyntax.TupleConsExpr:
+	switch e := expr.(type) {
+	case *hclsyntax.ObjectConsExpr, *hclsyntax.TupleConsExpr, *hclsyntax.ForExpr:
 		return catComplex
+	case *hclsyntax.FunctionCallExpr:
+		if complexFuncs[e.Name] {
+			return catComplex
+		}
+		return catPrimitive
 	default:
+		r := expr.Range()
+		if r.End.Line > r.Start.Line {
+			return catComplex
+		}
 		return catPrimitive
 	}
 }
@@ -90,11 +108,26 @@ type bodyItem struct {
 	fullRange hcl.Range
 }
 
-func collectBodyItems(body *hclsyntax.Body) []bodyItem {
+func extendToLineEnd(src []byte, pos hcl.Pos) hcl.Pos {
+	i := pos.Byte
+	for i < len(src) && src[i] != '\n' {
+		i++
+	}
+	end := strings.TrimRight(string(src[pos.Byte:i]), " \t")
+	pos.Byte += len(end)
+	pos.Column += len(end)
+	return pos
+}
+
+func collectBodyItems(body *hclsyntax.Body, src []byte) []bodyItem {
 	items := make([]bodyItem, 0, len(body.Attributes)+len(body.Blocks))
 
 	for name, attr := range body.Attributes {
 		r := attr.Range()
+		exprEnd := attr.Expr.Range().End
+		if src != nil {
+			exprEnd = extendToLineEnd(src, exprEnd)
+		}
 		items = append(items, bodyItem{
 			name:      name,
 			category:  categorizeAttr(name, attr.Expr),
@@ -104,7 +137,7 @@ func collectBodyItems(body *hclsyntax.Body) []bodyItem {
 			fullRange: hcl.Range{
 				Filename: attr.NameRange.Filename,
 				Start:    attr.NameRange.Start,
-				End:      attr.Expr.Range().End,
+				End:      exprEnd,
 			},
 		})
 	}
@@ -140,11 +173,11 @@ func collectBodyItems(body *hclsyntax.Body) []bodyItem {
 //   - Consecutive different-type nested blocks require a blank line.
 //   - Consecutive lifecycle meta-arguments each require their own blank line.
 func needsBlankLineBefore(item, prev bodyItem) bool {
-	if item.name == "content" {
-		return false
-	}
 	if item.category > prev.category {
 		if prev.category <= catSource && item.category <= catSource {
+			return false
+		}
+		if item.category == catBlock && item.name == "content" {
 			return false
 		}
 		return true
@@ -163,6 +196,25 @@ func needsBlankLineBefore(item, prev bodyItem) bool {
 		}
 	}
 	return false
+}
+
+var errFixConflict = errors.New("fix conflict")
+
+func replaceTextOrConflict(f tflint.Fixer, rng hcl.Range, text string) error {
+	if err := f.ReplaceText(rng, text); err != nil {
+		return errors.Join(errFixConflict, err)
+	}
+	return nil
+}
+
+func applyFix(f tflint.Fixer, fn func() error) error {
+	if err := fn(); err != nil {
+		if errors.Is(err, errFixConflict) {
+			return tflint.ErrFixNotSupported
+		}
+		return err
+	}
+	return nil
 }
 
 // needsAlphaCheck returns true if alphabetical order must be enforced between
@@ -217,21 +269,201 @@ func (r *TerraformSortedArgumentsRule) Check(runner tflint.Runner) error {
 	return nil
 }
 
+func blockHasViolations(items []bodyItem) bool {
+	for i, item := range items {
+		if i == 0 {
+			continue
+		}
+		prev := items[i-1]
+		if item.category < prev.category {
+			return true
+		}
+		if needsAlphaCheck(item, prev) && item.name < prev.name {
+			return true
+		}
+		if needsBlankLineBefore(item, prev) && item.startLine <= prev.endLine+1 {
+			return true
+		}
+		if prev.category <= catSource && item.category <= catSource && item.startLine > prev.endLine+1 {
+			return true
+		}
+	}
+	return false
+}
+
 func (r *TerraformSortedArgumentsRule) checkFile(runner tflint.Runner, file *hcl.File) error {
 	body, ok := file.Body.(*hclsyntax.Body)
 	if !ok {
 		return nil
 	}
 	for _, block := range body.Blocks {
-		if err := r.checkBlock(runner, block); err != nil {
+		if block.Type == "variable" {
+			continue
+		}
+		if err := r.checkBlock(runner, block, file.Bytes); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (r *TerraformSortedArgumentsRule) checkBlock(runner tflint.Runner, block *hclsyntax.Block) error {
-	items := collectBodyItems(block.Body)
+// extractCommentLines returns comment lines found in the gap text between two
+// items. The first line of the gap (remainder of the previous item's line) is
+// skipped so that inline comments stay with the preceding item.
+func isCommentLine(line string) bool {
+	return strings.HasPrefix(line, "#") || strings.HasPrefix(line, "//") || strings.HasPrefix(line, "/*")
+}
+
+func extractCommentLines(gap string) []string {
+	lines := strings.Split(gap, "\n")
+	var comments []string
+	inBlock := false
+	for _, line := range lines[1:] {
+		trimmed := strings.TrimSpace(line)
+		if inBlock {
+			comments = append(comments, trimmed)
+			if strings.Contains(trimmed, "*/") {
+				inBlock = false
+			}
+			continue
+		}
+		if strings.HasPrefix(trimmed, "/*") {
+			inBlock = true
+			comments = append(comments, trimmed)
+			if strings.Contains(trimmed, "*/") {
+				inBlock = false
+			}
+		} else if strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "//") {
+			comments = append(comments, trimmed)
+		}
+	}
+	return comments
+}
+
+// findCommentStart returns the position of the first comment line in gap text.
+// pos is the starting position of the gap in the file.
+func findCommentStart(gap string, pos hcl.Pos) hcl.Pos {
+	lines := strings.Split(gap, "\n")
+	cur := pos
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if isCommentLine(trimmed) {
+			return cur
+		}
+		cur.Line++
+		cur.Byte += len(line) + 1
+		cur.Column = 1
+	}
+	return pos
+}
+
+type richItem struct {
+	bodyItem
+	comments []string
+	text     []byte
+}
+
+func attachComments(items []bodyItem, f tflint.Fixer, bodyStart *hcl.Pos) []richItem {
+	rich := make([]richItem, len(items))
+	for i, item := range items {
+		var comments []string
+		var gapStart hcl.Pos
+		if i > 0 {
+			gapStart = items[i-1].fullRange.End
+		} else if bodyStart != nil {
+			gapStart = *bodyStart
+		}
+		if gapStart.Byte > 0 || i > 0 {
+			gapRange := hcl.Range{
+				Filename: item.fullRange.Filename,
+				Start:    gapStart,
+				End:      item.fullRange.Start,
+			}
+			gap := string(f.TextAt(gapRange).Bytes)
+			if i == 0 {
+				comments = extractCommentLines("\n" + gap)
+			} else {
+				comments = extractCommentLines(gap)
+			}
+		}
+		rich[i] = richItem{bodyItem: item, comments: comments}
+	}
+	return rich
+}
+
+func writeItems(buf *strings.Builder, sorted []richItem, indent string, separator func(item, prev richItem) bool) {
+	for i, item := range sorted {
+		if i > 0 {
+			if separator(item, sorted[i-1]) {
+				buf.WriteString("\n\n")
+			} else {
+				buf.WriteString("\n")
+			}
+			for _, c := range item.comments {
+				buf.WriteString(indent + c + "\n")
+			}
+			buf.WriteString(indent)
+		} else {
+			for _, c := range item.comments {
+				buf.WriteString(c + "\n" + indent)
+			}
+		}
+		buf.WriteString(string(item.text))
+	}
+}
+
+func buildBlockFix(items []bodyItem, bodyStart *hcl.Pos) func(tflint.Fixer) error {
+	return func(f tflint.Fixer) error {
+		return applyFix(f, func() error {
+			if len(items) < 2 {
+				return nil
+			}
+
+			rich := attachComments(items, f, bodyStart)
+
+			sorted := make([]richItem, len(rich))
+			copy(sorted, rich)
+			sort.SliceStable(sorted, func(i, j int) bool {
+				if sorted[i].category != sorted[j].category {
+					return sorted[i].category < sorted[j].category
+				}
+				return sorted[i].name < sorted[j].name
+			})
+
+			indent := strings.Repeat(" ", items[0].fullRange.Start.Column-1)
+			for i := range sorted {
+				sorted[i].text = f.TextAt(sorted[i].fullRange).Bytes
+			}
+
+			var buf strings.Builder
+			writeItems(&buf, sorted, indent, func(item, prev richItem) bool {
+				return needsBlankLineBefore(item.bodyItem, prev.bodyItem)
+			})
+
+			spanStart := items[0].fullRange.Start
+			if len(rich[0].comments) > 0 && bodyStart != nil {
+				spanStart = findCommentStart(string(f.TextAt(hcl.Range{
+					Filename: items[0].fullRange.Filename,
+					Start:    *bodyStart,
+					End:      items[0].fullRange.Start,
+				}).Bytes), *bodyStart)
+			}
+
+			spanRange := hcl.Range{
+				Filename: items[0].fullRange.Filename,
+				Start:    spanStart,
+				End:      items[len(items)-1].fullRange.End,
+			}
+			return replaceTextOrConflict(f, spanRange, buf.String())
+		})
+	}
+}
+
+func (r *TerraformSortedArgumentsRule) checkBlock(runner tflint.Runner, block *hclsyntax.Block, src []byte) error {
+	items := collectBodyItems(block.Body, src)
+	bodyStart := block.OpenBraceRange.End
+	hasViolations := blockHasViolations(items)
+	fix := buildBlockFix(items, &bodyStart)
 
 	for i, item := range items {
 		if i == 0 {
@@ -247,7 +479,7 @@ func (r *TerraformSortedArgumentsRule) checkBlock(runner tflint.Runner, block *h
 				prev.name, catLabel[prev.category],
 				orderingHint,
 			)
-			if err := runner.EmitIssue(r, msg, item.nameRange); err != nil {
+			if err := runner.EmitIssueWithFix(r, msg, item.nameRange, fix); err != nil {
 				return err
 			}
 		}
@@ -258,7 +490,7 @@ func (r *TerraformSortedArgumentsRule) checkBlock(runner tflint.Runner, block *h
 				"argument %q is not sorted: it should come before %q",
 				item.name, prev.name,
 			)
-			if err := runner.EmitIssue(r, msg, item.nameRange); err != nil {
+			if err := runner.EmitIssueWithFix(r, msg, item.nameRange, fix); err != nil {
 				return err
 			}
 		}
@@ -269,16 +501,28 @@ func (r *TerraformSortedArgumentsRule) checkBlock(runner tflint.Runner, block *h
 				"missing blank line before %q (%s)",
 				item.name, catLabel[item.category],
 			)
-			if err := runner.EmitIssue(r, msg, item.nameRange); err != nil {
+			if err := runner.EmitIssueWithFix(r, msg, item.nameRange, fix); err != nil {
+				return err
+			}
+		}
+
+		// Rule 4 — no blank line within the top-meta group (provider/count/for_each/source).
+		if prev.category <= catSource && item.category <= catSource && item.startLine > prev.endLine+1 {
+			msg := fmt.Sprintf(
+				"unexpected blank line before %q: provider, count/for_each, and source should form a single unit",
+				item.name,
+			)
+			if err := runner.EmitIssueWithFix(r, msg, item.nameRange, fix); err != nil {
 				return err
 			}
 		}
 	}
 
-	// Recurse into nested blocks.
-	for _, nested := range block.Body.Blocks {
-		if err := r.checkBlock(runner, nested); err != nil {
-			return err
+	if !hasViolations {
+		for _, nested := range block.Body.Blocks {
+			if err := r.checkBlock(runner, nested, src); err != nil {
+				return err
+			}
 		}
 	}
 
