@@ -14,6 +14,7 @@ func TestTerraformSortedArguments(t *testing.T) {
 		name   string
 		config string
 		issues helper.Issues
+		fixed  string
 	}{
 		// ── Alphabetical ordering (simple scalars) ──────────────────────────────
 		{
@@ -45,6 +46,12 @@ resource "aws_instance" "web" {
 					},
 				},
 			},
+			fixed: `
+resource "aws_instance" "web" {
+  ami           = "ami-a1b2c3d4"
+  instance_type = "t2.micro"
+}
+`,
 		},
 
 		// ── Category ordering: primitive before complex ──────────────────────────
@@ -80,6 +87,69 @@ resource "aws_instance" "web" {
 					},
 				},
 			},
+			fixed: `
+resource "aws_instance" "web" {
+  instance_type = "t2.micro"
+
+  tags = { Name = "web" }
+}
+`,
+		},
+		{
+			name: "for expression before simple - category violation",
+			config: `
+resource "aws_instance" "web" {
+  member = [for u in var.users : u.id]
+  name   = "web"
+}
+`,
+			issues: helper.Issues{
+				{
+					Rule: rule,
+					Message: `argument "name" (primitive variable) should come before "member" (complex variable (list/map)): ` +
+						orderingHint,
+					Range: hcl.Range{
+						Filename: "main.tf",
+						Start:    hcl.Pos{Line: 4, Column: 3},
+						End:      hcl.Pos{Line: 4, Column: 7},
+					},
+				},
+			},
+			fixed: `
+resource "aws_instance" "web" {
+  name = "web"
+
+  member = [for u in var.users : u.id]
+}
+`,
+		},
+		{
+			name: "jsonencode before simple - category violation",
+			config: `
+resource "aws_instance" "web" {
+  field_mappings = jsonencode({ key = "value" })
+  name           = "web"
+}
+`,
+			issues: helper.Issues{
+				{
+					Rule: rule,
+					Message: `argument "name" (primitive variable) should come before "field_mappings" (complex variable (list/map)): ` +
+						orderingHint,
+					Range: hcl.Range{
+						Filename: "main.tf",
+						Start:    hcl.Pos{Line: 4, Column: 3},
+						End:      hcl.Pos{Line: 4, Column: 7},
+					},
+				},
+			},
+			fixed: `
+resource "aws_instance" "web" {
+  name = "web"
+
+  field_mappings = jsonencode({ key = "value" })
+}
+`,
 		},
 		{
 			name: "array before simple - category violation",
@@ -101,6 +171,13 @@ resource "aws_instance" "web" {
 					},
 				},
 			},
+			fixed: `
+resource "aws_instance" "web" {
+  ami = "ami-a1b2c3d4"
+
+  security_groups = ["sg-1"]
+}
+`,
 		},
 
 		// ── Blank line before complex/block items ───────────────────────────────
@@ -123,6 +200,13 @@ resource "aws_instance" "web" {
 					},
 				},
 			},
+			fixed: `
+resource "aws_instance" "web" {
+  ami = "ami-a1b2c3d4"
+
+  tags = { Name = "web" }
+}
+`,
 		},
 		{
 			name: "array without blank line - blank line violation",
@@ -143,6 +227,13 @@ resource "aws_instance" "web" {
 					},
 				},
 			},
+			fixed: `
+resource "aws_instance" "web" {
+  ami = "ami-a1b2c3d4"
+
+  security_groups = ["sg-1"]
+}
+`,
 		},
 		{
 			name: "nested block without blank line - blank line violation",
@@ -165,6 +256,15 @@ resource "aws_instance" "web" {
 					},
 				},
 			},
+			fixed: `
+resource "aws_instance" "web" {
+  ami = "ami-a1b2c3d4"
+
+  root_block_device {
+    volume_size = 20
+  }
+}
+`,
 		},
 		{
 			name: "nested block with blank line - no issues",
@@ -178,6 +278,70 @@ resource "aws_instance" "web" {
 }
 `,
 			issues: helper.Issues{},
+		},
+
+		// ── Blank line between consecutive complex variables ────────────────────
+		{
+			name: "two maps without blank line - blank line violation",
+			config: `
+resource "aws_instance" "web" {
+  ami = "ami-a1b2c3d4"
+
+  labels = { env = "prod" }
+  tags   = { Name = "web" }
+}
+`,
+			issues: helper.Issues{
+				{
+					Rule:    rule,
+					Message: `missing blank line before "tags" (complex variable (list/map))`,
+					Range: hcl.Range{
+						Filename: "main.tf",
+						Start:    hcl.Pos{Line: 6, Column: 3},
+						End:      hcl.Pos{Line: 6, Column: 7},
+					},
+				},
+			},
+			fixed: `
+resource "aws_instance" "web" {
+  ami = "ami-a1b2c3d4"
+
+  labels = { env = "prod" }
+
+  tags = { Name = "web" }
+}
+`,
+		},
+		{
+			name: "two lists without blank line - blank line violation",
+			config: `
+resource "aws_instance" "web" {
+  ami = "ami-a1b2c3d4"
+
+  cidr_blocks     = ["10.0.0.0/16"]
+  security_groups = ["sg-1"]
+}
+`,
+			issues: helper.Issues{
+				{
+					Rule:    rule,
+					Message: `missing blank line before "security_groups" (complex variable (list/map))`,
+					Range: hcl.Range{
+						Filename: "main.tf",
+						Start:    hcl.Pos{Line: 6, Column: 3},
+						End:      hcl.Pos{Line: 6, Column: 18},
+					},
+				},
+			},
+			fixed: `
+resource "aws_instance" "web" {
+  ami = "ami-a1b2c3d4"
+
+  cidr_blocks = ["10.0.0.0/16"]
+
+  security_groups = ["sg-1"]
+}
+`,
 		},
 
 		// ── Alphabetical within complex category ────────────────────────────────
@@ -203,6 +367,15 @@ resource "aws_instance" "web" {
 					},
 				},
 			},
+			fixed: `
+resource "aws_instance" "web" {
+  ami = "ami-a1b2c3d4"
+
+  metadata = { key = "val" }
+
+  tags = { Name = "web" }
+}
+`,
 		},
 
 		// ── Nested block body is also checked ───────────────────────────────────
@@ -229,6 +402,16 @@ resource "aws_instance" "web" {
 					},
 				},
 			},
+			fixed: `
+resource "aws_instance" "web" {
+  ami = "ami-a1b2c3d4"
+
+  root_block_device {
+    delete_on_termination = true
+    volume_size           = 20
+  }
+}
+`,
 		},
 
 		// ── Meta-argument: source for modules ───────────────────────────────────
@@ -264,6 +447,13 @@ module "database" {
 					},
 				},
 			},
+			fixed: `
+module "database" {
+  source = "../modules/database"
+
+  db_size = 10
+}
+`,
 		},
 		{
 			name: "module source first without blank line - blank line violation",
@@ -284,6 +474,13 @@ module "database" {
 					},
 				},
 			},
+			fixed: `
+module "database" {
+  source = "../modules/database"
+
+  db_size = 10
+}
+`,
 		},
 
 		// ── Meta-argument: for_each / count for resources ────────────────────────
@@ -319,6 +516,13 @@ resource "aws_instance" "web" {
 					},
 				},
 			},
+			fixed: `
+resource "aws_instance" "web" {
+  for_each = toset(["a", "b"])
+
+  ami = "ami-a1b2c3d4"
+}
+`,
 		},
 		{
 			name: "resource for_each first without blank line - blank line violation",
@@ -339,6 +543,13 @@ resource "aws_instance" "web" {
 					},
 				},
 			},
+			fixed: `
+resource "aws_instance" "web" {
+  for_each = toset(["a", "b"])
+
+  instance_type = "t2.micro"
+}
+`,
 		},
 		{
 			name: "data source count first with blank line - no issues",
@@ -385,6 +596,13 @@ resource "aws_instance" "web" {
 					},
 				},
 			},
+			fixed: `
+resource "aws_instance" "web" {
+  provider = aws.us_east
+
+  ami = "ami-a1b2c3d4"
+}
+`,
 		},
 		{
 			name: "provider without blank line before primitives - blank line violation",
@@ -405,6 +623,13 @@ resource "aws_instance" "web" {
 					},
 				},
 			},
+			fixed: `
+resource "aws_instance" "web" {
+  provider = aws.us_east
+
+  instance_type = "t2.micro"
+}
+`,
 		},
 
 		// ── Category 7: lifecycle meta-arguments at bottom ───────────────────────
@@ -456,6 +681,15 @@ resource "aws_instance" "web" {
 					},
 				},
 			},
+			fixed: `
+resource "aws_instance" "web" {
+  ami = "ami-a1b2c3d4"
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+`,
 		},
 		{
 			name: "lifecycle without blank line - blank line violation",
@@ -478,6 +712,15 @@ resource "aws_instance" "web" {
 					},
 				},
 			},
+			fixed: `
+resource "aws_instance" "web" {
+  ami = "ami-a1b2c3d4"
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+`,
 		},
 		{
 			name: "depends_on and lifecycle both at bottom - blank line between each",
@@ -517,6 +760,17 @@ resource "aws_instance" "web" {
 					},
 				},
 			},
+			fixed: `
+resource "aws_instance" "web" {
+  ami = "ami-a1b2c3d4"
+
+  depends_on = [aws_vpc.main]
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+`,
 		},
 
 		// ── Consecutive same-type blocks: grouped without blank line ─────────────
@@ -533,6 +787,80 @@ resource "aws_autoscaling_group" "web" {
   tag {
     key   = "Env"
     value = "prod"
+  }
+}
+`,
+			issues: helper.Issues{},
+		},
+		{
+			name: "consecutive dynamic blocks without blank line - blank line violation",
+			config: `
+resource "aws_instance" "web" {
+  ami = "ami-a1b2c3d4"
+
+  dynamic "allowed_to_push" {
+    for_each = var.push_users
+    content {
+      user_id = allowed_to_push.value
+    }
+  }
+  dynamic "allowed_to_merge" {
+    for_each = var.merge_users
+    content {
+      user_id = allowed_to_merge.value
+    }
+  }
+}
+`,
+			issues: helper.Issues{
+				{
+					Rule:    rule,
+					Message: `missing blank line before "dynamic" (nested block)`,
+					Range: hcl.Range{
+						Filename: "main.tf",
+						Start:    hcl.Pos{Line: 11, Column: 3},
+						End:      hcl.Pos{Line: 11, Column: 10},
+					},
+				},
+			},
+			fixed: `
+resource "aws_instance" "web" {
+  ami = "ami-a1b2c3d4"
+
+  dynamic "allowed_to_push" {
+    for_each = var.push_users
+    content {
+      user_id = allowed_to_push.value
+    }
+  }
+
+  dynamic "allowed_to_merge" {
+    for_each = var.merge_users
+    content {
+      user_id = allowed_to_merge.value
+    }
+  }
+}
+`,
+		},
+		{
+			name: "consecutive dynamic blocks with blank line - no issues",
+			config: `
+resource "aws_instance" "web" {
+  ami = "ami-a1b2c3d4"
+
+  dynamic "allowed_to_push" {
+    for_each = var.push_users
+    content {
+      user_id = allowed_to_push.value
+    }
+  }
+
+  dynamic "allowed_to_merge" {
+    for_each = var.merge_users
+    content {
+      user_id = allowed_to_merge.value
+    }
   }
 }
 `,
@@ -563,6 +891,19 @@ resource "aws_instance" "web" {
 					},
 				},
 			},
+			fixed: `
+resource "aws_instance" "web" {
+  ami = "ami-a1b2c3d4"
+
+  ebs_block_device {
+    device_name = "/dev/sdb"
+  }
+
+  root_block_device {
+    volume_size = 20
+  }
+}
+`,
 		},
 		{
 			name: "consecutive different-type blocks with blank line - no issues",
@@ -632,6 +973,141 @@ resource "aws_instance" "web" {
 					},
 				},
 			},
+			fixed: `
+resource "aws_instance" "web" {
+  ami           = "ami-a1b2c3d4"
+  instance_type = "t2.micro"
+
+  tags = { Name = "web" }
+}
+`,
+		},
+
+		// ── Complex after blocks: reorder ───────────────────────────────────────
+		{
+			name: "complex attr after block - category violation with fix",
+			config: `
+resource "google_compute_firewall" "test" {
+  direction = "EGRESS"
+  name      = "test"
+
+  allow {
+    protocol = "tcp"
+  }
+
+  destination_ranges = ["10.0.0.0/8"]
+}
+`,
+			issues: helper.Issues{
+				{
+					Rule: rule,
+					Message: `argument "destination_ranges" (complex variable (list/map)) should come before "allow" (nested block): ` +
+						orderingHint,
+					Range: hcl.Range{
+						Filename: "main.tf",
+						Start:    hcl.Pos{Line: 10, Column: 3},
+						End:      hcl.Pos{Line: 10, Column: 21},
+					},
+				},
+			},
+			fixed: `
+resource "google_compute_firewall" "test" {
+  direction = "EGRESS"
+  name      = "test"
+
+  destination_ranges = ["10.0.0.0/8"]
+
+  allow {
+    protocol = "tcp"
+  }
+}
+`,
+		},
+
+		{
+			name: "multiple complex attrs after multiple blocks - fix",
+			config: `
+resource "google_compute_firewall" "test" {
+  direction = "EGRESS"
+  name      = "test"
+  network   = var.network_id
+
+  allow {
+    ports    = [5432]
+    protocol = "tcp"
+  }
+
+  log_config {
+    metadata = "INCLUDE_ALL_METADATA"
+  }
+
+  destination_ranges = [var.cloudsql_ip]
+
+  target_service_accounts = [google_service_account.db.email]
+}
+`,
+			issues: helper.Issues{
+				{
+					Rule: rule,
+					Message: `argument "destination_ranges" (complex variable (list/map)) should come before "log_config" (nested block): ` +
+						orderingHint,
+					Range: hcl.Range{
+						Filename: "main.tf",
+						Start:    hcl.Pos{Line: 16, Column: 3},
+						End:      hcl.Pos{Line: 16, Column: 21},
+					},
+				},
+			},
+			fixed: `
+resource "google_compute_firewall" "test" {
+  direction = "EGRESS"
+  name      = "test"
+  network   = var.network_id
+
+  destination_ranges = [var.cloudsql_ip]
+
+  target_service_accounts = [google_service_account.db.email]
+
+  allow {
+    ports    = [5432]
+    protocol = "tcp"
+  }
+
+  log_config {
+    metadata = "INCLUDE_ALL_METADATA"
+  }
+}
+`,
+		},
+
+		// ── Comments preserved during sort ───────────────────────────────────────
+		{
+			name: "comments preserved when reordering",
+			config: `
+resource "aws_instance" "web" {
+  # Hardcoded value due to missing data source
+  instance_type = "t2.micro"
+  ami           = "ami-a1b2c3d4"
+}
+`,
+			issues: helper.Issues{
+				{
+					Rule:    rule,
+					Message: `argument "ami" is not sorted: it should come before "instance_type"`,
+					Range: hcl.Range{
+						Filename: "main.tf",
+						Start:    hcl.Pos{Line: 5, Column: 3},
+						End:      hcl.Pos{Line: 5, Column: 6},
+					},
+				},
+			},
+			fixed: `
+resource "aws_instance" "web" {
+  ami = "ami-a1b2c3d4"
+  # Hardcoded value due to missing data source
+  instance_type = "t2.micro"
+}
+`,
 		},
 
 		// ── Multiple resource blocks in same file ────────────────────────────────
@@ -668,6 +1144,17 @@ resource "aws_instance" "db" {
 					},
 				},
 			},
+			fixed: `
+resource "aws_instance" "web" {
+  ami           = "ami-a1b2c3d4"
+  instance_type = "t2.micro"
+}
+
+resource "aws_instance" "db" {
+  ami           = "ami-a1b2c3d4"
+  instance_type = "t2.micro"
+}
+`,
 		},
 
 		// ── count + for_each alphabetical ordering ───────────────────────────────
@@ -702,11 +1189,17 @@ resource "aws_instance" "web" {
 					},
 				},
 			},
+			fixed: `
+resource "aws_instance" "web" {
+  count    = 2
+  for_each = toset(["a"])
+}
+`,
 		},
 
 		// ── provider + count blank line ──────────────────────────────────────────
 		{
-			name: "provider then count with blank line - no issues",
+			name: "provider then count with blank line - unwanted blank line",
 			config: `
 resource "aws_instance" "web" {
   provider = aws.us_east
@@ -716,10 +1209,28 @@ resource "aws_instance" "web" {
   ami = "ami-a1b2c3d4"
 }
 `,
-			issues: helper.Issues{},
+			issues: helper.Issues{
+				{
+					Rule:    rule,
+					Message: `unexpected blank line before "count": provider, count/for_each, and source should form a single unit`,
+					Range: hcl.Range{
+						Filename: "main.tf",
+						Start:    hcl.Pos{Line: 5, Column: 3},
+						End:      hcl.Pos{Line: 5, Column: 8},
+					},
+				},
+			},
+			fixed: `
+resource "aws_instance" "web" {
+  provider = aws.us_east
+  count    = 2
+
+  ami = "ami-a1b2c3d4"
+}
+`,
 		},
 		{
-			name: "provider then count without blank line - blank line violation",
+			name: "provider then count without blank line - no issues",
 			config: `
 resource "aws_instance" "web" {
   provider = aws.us_east
@@ -728,17 +1239,7 @@ resource "aws_instance" "web" {
   ami = "ami-a1b2c3d4"
 }
 `,
-			issues: helper.Issues{
-				{
-					Rule:    rule,
-					Message: `missing blank line before "count" (instantiation meta-argument (count/for_each))`,
-					Range: hcl.Range{
-						Filename: "main.tf",
-						Start:    hcl.Pos{Line: 4, Column: 3},
-						End:      hcl.Pos{Line: 4, Column: 8},
-					},
-				},
-			},
+			issues: helper.Issues{},
 		},
 
 		// ── Three+ primitives: transitivity ─────────────────────────────────────
@@ -773,11 +1274,18 @@ resource "aws_instance" "web" {
 					},
 				},
 			},
+			fixed: `
+resource "aws_instance" "web" {
+  ami           = "ami-a1b2c3d4"
+  instance_type = "t2.micro"
+  subnet_id     = "subnet-abc"
+}
+`,
 		},
 
 		// ── Module: source + for_each blank line ─────────────────────────────────
 		{
-			name: "module for_each then source with blank line - no issues",
+			name: "module for_each then source with blank line - unwanted blank line",
 			config: `
 module "database" {
   for_each = toset(["a", "b"])
@@ -787,10 +1295,28 @@ module "database" {
   db_size = 10
 }
 `,
-			issues: helper.Issues{},
+			issues: helper.Issues{
+				{
+					Rule:    rule,
+					Message: `unexpected blank line before "source": provider, count/for_each, and source should form a single unit`,
+					Range: hcl.Range{
+						Filename: "main.tf",
+						Start:    hcl.Pos{Line: 5, Column: 3},
+						End:      hcl.Pos{Line: 5, Column: 9},
+					},
+				},
+			},
+			fixed: `
+module "database" {
+  for_each = toset(["a", "b"])
+  source   = "../modules/database"
+
+  db_size = 10
+}
+`,
 		},
 		{
-			name: "module for_each then source without blank line - blank line violation",
+			name: "module for_each then source without blank line - no issues",
 			config: `
 module "database" {
   for_each = toset(["a", "b"])
@@ -799,17 +1325,86 @@ module "database" {
   db_size = 10
 }
 `,
+			issues: helper.Issues{},
+		},
+
+		// ── Multiple resource blocks with nested violations ─────────────────────
+		{
+			name: "multi-resource file with nested and outer violations",
+			config: `
+resource "google_compute_firewall" "fw1" {
+  direction = "EGRESS"
+  name      = "fw1"
+  network   = var.network_id
+
+  allow {
+    ports    = [5432]
+    protocol = "tcp"
+  }
+
+  destination_ranges = [var.cloudsql_ip]
+}
+
+resource "google_compute_firewall" "fw2" {
+  direction = "EGRESS"
+  name      = "fw2"
+  network   = var.network_id
+
+  allow {
+    protocol = "tcp"
+  }
+
+  destination_ranges = [var.cloudsql_ip]
+}
+`,
 			issues: helper.Issues{
 				{
-					Rule:    rule,
-					Message: `missing blank line before "source" (source)`,
+					Rule: rule,
+					Message: `argument "destination_ranges" (complex variable (list/map)) should come before "allow" (nested block): ` +
+						orderingHint,
 					Range: hcl.Range{
 						Filename: "main.tf",
-						Start:    hcl.Pos{Line: 4, Column: 3},
-						End:      hcl.Pos{Line: 4, Column: 9},
+						Start:    hcl.Pos{Line: 12, Column: 3},
+						End:      hcl.Pos{Line: 12, Column: 21},
+					},
+				},
+				{
+					Rule: rule,
+					Message: `argument "destination_ranges" (complex variable (list/map)) should come before "allow" (nested block): ` +
+						orderingHint,
+					Range: hcl.Range{
+						Filename: "main.tf",
+						Start:    hcl.Pos{Line: 24, Column: 3},
+						End:      hcl.Pos{Line: 24, Column: 21},
 					},
 				},
 			},
+			fixed: `
+resource "google_compute_firewall" "fw1" {
+  direction = "EGRESS"
+  name      = "fw1"
+  network   = var.network_id
+
+  destination_ranges = [var.cloudsql_ip]
+
+  allow {
+    ports    = [5432]
+    protocol = "tcp"
+  }
+}
+
+resource "google_compute_firewall" "fw2" {
+  direction = "EGRESS"
+  name      = "fw2"
+  network   = var.network_id
+
+  destination_ranges = [var.cloudsql_ip]
+
+  allow {
+    protocol = "tcp"
+  }
+}
+`,
 		},
 
 		// ── Deeply nested blocks (3 levels) ─────────────────────────────────────
@@ -840,6 +1435,370 @@ resource "aws_instance" "web" {
 					},
 				},
 			},
+			fixed: `
+resource "aws_instance" "web" {
+  ami = "ami-a1b2c3d4"
+
+  root_block_device {
+    volume_size = 20
+
+    nested_deep {
+      a_attr = "a"
+      z_attr = "z"
+    }
+  }
+}
+`,
+		},
+		{
+			name: "inline comment preserved when reordering",
+			config: `
+resource "vault_generic_secret" "ci" {
+  path = "secrets/ci"
+
+  data_json = jsonencode({
+    max_request_duration = "86400s" # 24 hours
+  })
+
+  disable_read = true
+}
+`,
+			issues: helper.Issues{
+				{
+					Rule:    rule,
+					Message: `argument "disable_read" (primitive variable) should come before "data_json" (complex variable (list/map)): ` + orderingHint,
+					Range: hcl.Range{
+						Filename: "main.tf",
+						Start:    hcl.Pos{Line: 9, Column: 3},
+						End:      hcl.Pos{Line: 9, Column: 15},
+					},
+				},
+			},
+			fixed: `
+resource "vault_generic_secret" "ci" {
+  disable_read = true
+  path         = "secrets/ci"
+
+  data_json = jsonencode({
+    max_request_duration = "86400s" # 24 hours
+  })
+}
+`,
+		},
+		{
+			name: "compact treated as complex type",
+			config: `
+resource "google_compute_instance" "web" {
+  for_each = local.instances
+
+  name = "instance"
+  resource_policies = compact([
+    lookup(each.value, "policy", false) ? google_compute_resource_policy.nightly.self_link : null,
+  ])
+  zone = local.zone
+}
+`,
+			issues: helper.Issues{
+				{
+					Rule:    rule,
+					Message: `missing blank line before "resource_policies" (complex variable (list/map))`,
+					Range: hcl.Range{
+						Filename: "main.tf",
+						Start:    hcl.Pos{Line: 6, Column: 3},
+						End:      hcl.Pos{Line: 6, Column: 20},
+					},
+				},
+				{
+					Rule:    rule,
+					Message: `argument "zone" (primitive variable) should come before "resource_policies" (complex variable (list/map)): ` + orderingHint,
+					Range: hcl.Range{
+						Filename: "main.tf",
+						Start:    hcl.Pos{Line: 9, Column: 3},
+						End:      hcl.Pos{Line: 9, Column: 7},
+					},
+				},
+			},
+			fixed: `
+resource "google_compute_instance" "web" {
+  for_each = local.instances
+
+  name = "instance"
+  zone = local.zone
+
+  resource_policies = compact([
+    lookup(each.value, "policy", false) ? google_compute_resource_policy.nightly.self_link : null,
+  ])
+}
+`,
+		},
+		{
+			name: "merge treated as complex type",
+			config: `
+resource "google_compute_instance" "web" {
+  for_each = local.instances
+
+  labels = merge(
+    { "app" = "web" },
+    lookup(each.value, "labels", {})
+  )
+  name = "instance"
+}
+`,
+			issues: helper.Issues{
+				{
+					Rule:    rule,
+					Message: `argument "name" (primitive variable) should come before "labels" (complex variable (list/map)): ` + orderingHint,
+					Range: hcl.Range{
+						Filename: "main.tf",
+						Start:    hcl.Pos{Line: 9, Column: 3},
+						End:      hcl.Pos{Line: 9, Column: 7},
+					},
+				},
+			},
+			fixed: `
+resource "google_compute_instance" "web" {
+  for_each = local.instances
+
+  name = "instance"
+
+  labels = merge(
+    { "app" = "web" },
+    lookup(each.value, "labels", {})
+  )
+}
+`,
+		},
+		{
+			name: "concat treated as complex type",
+			config: `
+locals {
+  roles = concat([
+    "roles/viewer",
+  ], var.extra_roles)
+  project = "my-project"
+}
+`,
+			issues: helper.Issues{
+				{
+					Rule:    rule,
+					Message: `argument "project" (primitive variable) should come before "roles" (complex variable (list/map)): ` + orderingHint,
+					Range: hcl.Range{
+						Filename: "main.tf",
+						Start:    hcl.Pos{Line: 6, Column: 3},
+						End:      hcl.Pos{Line: 6, Column: 10},
+					},
+				},
+			},
+			fixed: `
+locals {
+  project = "my-project"
+
+  roles = concat([
+    "roles/viewer",
+  ], var.extra_roles)
+}
+`,
+		},
+		{
+			name: "block comment preserved when reordering",
+			config: `
+resource "example" "test" {
+  name = "test"
+  /**
+    * This maps claims from the provider.
+    */
+  attribute_mapping = {
+    "attr" = "value"
+  }
+  display_name = "hello"
+}
+`,
+			issues: helper.Issues{
+				{
+					Rule:    rule,
+					Message: `argument "display_name" (primitive variable) should come before "attribute_mapping" (complex variable (list/map)): ` + orderingHint,
+					Range: hcl.Range{
+						Filename: "main.tf",
+						Start:    hcl.Pos{Line: 10, Column: 3},
+						End:      hcl.Pos{Line: 10, Column: 15},
+					},
+				},
+			},
+			fixed: `
+resource "example" "test" {
+  display_name = "hello"
+  name         = "test"
+
+  /**
+  * This maps claims from the provider.
+  */
+  attribute_mapping = {
+    "attr" = "value"
+  }
+}
+`,
+		},
+		{
+			name: "toset treated as complex type",
+			config: `
+resource "example" "test" {
+  members = toset([
+    "user:alice@example.com",
+    "user:bob@example.com",
+  ])
+  name = "test"
+}
+`,
+			issues: helper.Issues{
+				{
+					Rule:    rule,
+					Message: `argument "name" (primitive variable) should come before "members" (complex variable (list/map)): ` + orderingHint,
+					Range: hcl.Range{
+						Filename: "main.tf",
+						Start:    hcl.Pos{Line: 7, Column: 3},
+						End:      hcl.Pos{Line: 7, Column: 7},
+					},
+				},
+			},
+			fixed: `
+resource "example" "test" {
+  name = "test"
+
+  members = toset([
+    "user:alice@example.com",
+    "user:bob@example.com",
+  ])
+}
+`,
+		},
+		{
+			name: "heredoc treated as complex type",
+			config: `
+module "alert" {
+  source = "./modules/alert"
+
+  display_name          = "my alert"
+  documentation_content = <<-EOF
+    - *Threshold*: 1
+    - *Dashboard*: <https://example.com|Click here>
+  EOF
+  notification_channels = local.channels
+  severity              = "WARNING"
+}
+`,
+			issues: helper.Issues{
+				{
+					Rule:    rule,
+					Message: `missing blank line before "documentation_content" (complex variable (list/map))`,
+					Range: hcl.Range{
+						Filename: "main.tf",
+						Start:    hcl.Pos{Line: 6, Column: 3},
+						End:      hcl.Pos{Line: 6, Column: 24},
+					},
+				},
+				{
+					Rule:    rule,
+					Message: `argument "notification_channels" (primitive variable) should come before "documentation_content" (complex variable (list/map)): ` + orderingHint,
+					Range: hcl.Range{
+						Filename: "main.tf",
+						Start:    hcl.Pos{Line: 10, Column: 3},
+						End:      hcl.Pos{Line: 10, Column: 24},
+					},
+				},
+			},
+			fixed: `
+module "alert" {
+  source = "./modules/alert"
+
+  display_name          = "my alert"
+  notification_channels = local.channels
+  severity              = "WARNING"
+
+  documentation_content = <<-EOF
+    - *Threshold*: 1
+    - *Dashboard*: <https://example.com|Click here>
+  EOF
+}
+`,
+		},
+		{
+			name: "templatefile treated as complex type",
+			config: `
+resource "example" "test" {
+  name     = "test"
+  metadata = templatefile("${path.module}/template.yaml", {
+    project = var.project
+  })
+}
+`,
+			issues: helper.Issues{
+				{
+					Rule:    rule,
+					Message: `missing blank line before "metadata" (complex variable (list/map))`,
+					Range: hcl.Range{
+						Filename: "main.tf",
+						Start:    hcl.Pos{Line: 4, Column: 3},
+						End:      hcl.Pos{Line: 4, Column: 11},
+					},
+				},
+			},
+			fixed: `
+resource "example" "test" {
+  name = "test"
+
+  metadata = templatefile("${path.module}/template.yaml", {
+    project = var.project
+  })
+}
+`,
+		},
+		{
+			name: "content attribute needs blank line before it",
+			config: `
+resource "google_storage_bucket_object" "test" {
+  bucket = google_storage_bucket.test.name
+  name   = "config.yaml"
+  content = templatefile("${path.module}/config.yaml", {
+    endpoint = var.endpoint
+  })
+}
+`,
+			issues: helper.Issues{
+				{
+					Rule:    rule,
+					Message: `missing blank line before "content" (complex variable (list/map))`,
+					Range: hcl.Range{
+						Filename: "main.tf",
+						Start:    hcl.Pos{Line: 5, Column: 3},
+						End:      hcl.Pos{Line: 5, Column: 10},
+					},
+				},
+			},
+			fixed: `
+resource "google_storage_bucket_object" "test" {
+  bucket = google_storage_bucket.test.name
+  name   = "config.yaml"
+
+  content = templatefile("${path.module}/config.yaml", {
+    endpoint = var.endpoint
+  })
+}
+`,
+		},
+		{
+			name: "content block in dynamic does not need blank line",
+			config: `
+resource "example" "test" {
+  dynamic "setting" {
+    for_each = var.settings
+    content {
+      name  = setting.value.name
+      value = setting.value.value
+    }
+  }
+}
+`,
+			issues: helper.Issues{},
 		},
 	}
 
@@ -850,6 +1809,16 @@ resource "aws_instance" "web" {
 				t.Fatalf("unexpected error: %s", err)
 			}
 			helper.AssertIssues(t, tc.issues, runner.Issues)
+
+			if len(tc.issues) > 0 && tc.fixed == "" {
+				t.Fatal("test case reports issues but has no 'fixed' assertion")
+			}
+			if tc.fixed != "" {
+				got := string(runner.Changes()["main.tf"])
+				if got != tc.fixed {
+					t.Errorf("fix mismatch:\nwant:\n%s\ngot:\n%s", tc.fixed, got)
+				}
+			}
 		})
 	}
 }

@@ -14,6 +14,7 @@ func main() {
 			Version: "0.2.0",
 			Rules: []tflint.Rule{
 				rules.NewTerraformSortedArgumentsRule(),
+				rules.NewTerraformSortedVariablesRule(),
 			},
 		},
 	})
