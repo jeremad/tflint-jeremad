@@ -11,7 +11,7 @@ func main() {
 	plugin.Serve(&plugin.ServeOpts{
 		RuleSet: &tflint.BuiltinRuleSet{
 			Name:    "jeremad",
-			Version: "0.1.1",
+			Version: "0.2.0",
 			Rules: []tflint.Rule{
 				rules.NewTerraformSortedArgumentsRule(),
 			},
