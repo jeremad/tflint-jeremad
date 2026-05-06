@@ -280,7 +280,7 @@ variable "max_clients" {
 `,
 		},
 		{
-			name: "default before type with unknown attrs - reorders known and separates unknown",
+			name: "default before type with other attrs - reorders correctly",
 			config: `
 variable "name" {
   default   = "value"
@@ -299,15 +299,22 @@ variable "name" {
 						End:      hcl.Pos{Line: 4, Column: 7},
 					},
 				},
+				{
+					Rule:    rule,
+					Message: `argument "nullable" is not sorted: it should come before "sensitive"`,
+					Range: hcl.Range{
+						Filename: "main.tf",
+						Start:    hcl.Pos{Line: 6, Column: 3},
+						End:      hcl.Pos{Line: 6, Column: 11},
+					},
+				},
 			},
 			fixed: `
 variable "name" {
-  type    = string
-  default = "value"
-
+  type      = string
+  default   = "value"
+  nullable  = false
   sensitive = true
-
-  nullable = false
 }
 `,
 		},
@@ -338,6 +345,168 @@ variable "name" {
   type        = string
   default     = "value"
   description = "A var"
+}
+`,
+		},
+		{
+			name: "sensitive after description - no issues",
+			config: `
+variable "api_key" {
+  type        = string
+  description = "The API key"
+  sensitive   = true
+}
+`,
+			issues: helper.Issues{},
+		},
+		{
+			name: "sensitive before default - category violation",
+			config: `
+variable "api_key" {
+  type      = string
+  sensitive = true
+  default   = ""
+}
+`,
+			issues: helper.Issues{
+				{
+					Rule:    rule,
+					Message: `argument "default" should come before "sensitive" in variable blocks`,
+					Range: hcl.Range{
+						Filename: "main.tf",
+						Start:    hcl.Pos{Line: 5, Column: 3},
+						End:      hcl.Pos{Line: 5, Column: 10},
+					},
+				},
+			},
+			fixed: `
+variable "api_key" {
+  type      = string
+  default   = ""
+  sensitive = true
+}
+`,
+		},
+		{
+			name: "full variable with sensitive after description - no issues",
+			config: `
+variable "secret" {
+  type        = string
+  default     = ""
+  description = "A secret value"
+  sensitive   = true
+}
+`,
+			issues: helper.Issues{},
+		},
+		{
+			name: "other attrs sorted alphabetically - no issues",
+			config: `
+variable "name" {
+  type      = string
+  default   = ""
+  ephemeral = true
+  nullable  = false
+  sensitive = true
+}
+`,
+			issues: helper.Issues{},
+		},
+		{
+			name: "other attrs unsorted - violation",
+			config: `
+variable "name" {
+  type      = string
+  sensitive = true
+  nullable  = false
+}
+`,
+			issues: helper.Issues{
+				{
+					Rule:    rule,
+					Message: `argument "nullable" is not sorted: it should come before "sensitive"`,
+					Range: hcl.Range{
+						Filename: "main.tf",
+						Start:    hcl.Pos{Line: 5, Column: 3},
+						End:      hcl.Pos{Line: 5, Column: 11},
+					},
+				},
+			},
+			fixed: `
+variable "name" {
+  type      = string
+  nullable  = false
+  sensitive = true
+}
+`,
+		},
+		{
+			name: "validation without blank line - violation",
+			config: `
+variable "name" {
+  type    = string
+  default = "value"
+  validation {
+    condition     = length(var.name) > 0
+    error_message = "Must not be empty"
+  }
+}
+`,
+			issues: helper.Issues{
+				{
+					Rule:    rule,
+					Message: `missing blank line before "validation" block`,
+					Range: hcl.Range{
+						Filename: "main.tf",
+						Start:    hcl.Pos{Line: 5, Column: 3},
+						End:      hcl.Pos{Line: 5, Column: 13},
+					},
+				},
+			},
+			fixed: `
+variable "name" {
+  type    = string
+  default = "value"
+
+  validation {
+    condition     = length(var.name) > 0
+    error_message = "Must not be empty"
+  }
+}
+`,
+		},
+		{
+			name: "validation before attrs - category violation",
+			config: `
+variable "name" {
+  validation {
+    condition     = length(var.name) > 0
+    error_message = "Must not be empty"
+  }
+  type    = string
+  default = "value"
+}
+`,
+			issues: helper.Issues{
+				{
+					Rule:    rule,
+					Message: `argument "type" should come before "validation" in variable blocks`,
+					Range: hcl.Range{
+						Filename: "main.tf",
+						Start:    hcl.Pos{Line: 7, Column: 3},
+						End:      hcl.Pos{Line: 7, Column: 7},
+					},
+				},
+			},
+			fixed: `
+variable "name" {
+  type    = string
+  default = "value"
+
+  validation {
+    condition     = length(var.name) > 0
+    error_message = "Must not be empty"
+  }
 }
 `,
 		},

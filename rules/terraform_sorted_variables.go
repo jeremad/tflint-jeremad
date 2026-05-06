@@ -10,10 +10,26 @@ import (
 	"github.com/terraform-linters/tflint-plugin-sdk/tflint"
 )
 
-var varAttrOrder = map[string]int{
+var varFixedOrder = map[string]int{
 	"type":        0,
 	"default":     1,
 	"description": 2,
+}
+
+const (
+	varCatFixed      = 0
+	varCatOther      = 1
+	varCatValidation = 2
+)
+
+func varCategory(name string) int {
+	if _, ok := varFixedOrder[name]; ok {
+		return varCatFixed
+	}
+	if name == "validation" {
+		return varCatValidation
+	}
+	return varCatOther
 }
 
 type TerraformSortedVariablesRule struct {
@@ -46,10 +62,6 @@ func (r *TerraformSortedVariablesRule) checkFile(runner tflint.Runner, file *hcl
 	return nil
 }
 
-// buildVariableFix returns a Fixer callback that rewrites a variable block's
-// attributes in canonical order (type → default → description, then any
-// other attributes in source order). Like buildBlockFix, the output relies
-// on hclwrite.Format upstream to re-align whitespace.
 func buildVariableFix(items []bodyItem, bodyStart hcl.Pos) func(tflint.Fixer) error {
 	return func(f tflint.Fixer) error {
 		return applyFix(f, func() error {
@@ -61,19 +73,16 @@ func buildVariableFix(items []bodyItem, bodyStart hcl.Pos) func(tflint.Fixer) er
 
 			sorted := make([]richItem, len(rich))
 			copy(sorted, rich)
-			// Stable sort: among attributes not in varAttrOrder we
-			// preserve source order.
 			sort.SliceStable(sorted, func(i, j int) bool {
-				iOrder, iKnown := varAttrOrder[sorted[i].name]
-				jOrder, jKnown := varAttrOrder[sorted[j].name]
-				if iKnown && jKnown {
-					return iOrder < jOrder
+				ci, cj := varCategory(sorted[i].name), varCategory(sorted[j].name)
+				if ci != cj {
+					return ci < cj
 				}
-				if iKnown {
-					return true
+				if ci == varCatFixed {
+					return varFixedOrder[sorted[i].name] < varFixedOrder[sorted[j].name]
 				}
-				if jKnown {
-					return false
+				if ci == varCatOther {
+					return sorted[i].name < sorted[j].name
 				}
 				return false
 			})
@@ -85,9 +94,7 @@ func buildVariableFix(items []bodyItem, bodyStart hcl.Pos) func(tflint.Fixer) er
 
 			var buf strings.Builder
 			writeItems(&buf, sorted, indent, func(item, prev richItem) bool {
-				_, prevKnown := varAttrOrder[prev.name]
-				_, curKnown := varAttrOrder[item.name]
-				return !(prevKnown && curKnown)
+				return varCategory(item.name) == varCatValidation
 			})
 
 			spanStart := items[0].fullRange.Start
@@ -133,13 +140,37 @@ func (r *TerraformSortedVariablesRule) checkVariable(runner tflint.Runner, block
 
 	for i := 1; i < len(items); i++ {
 		prev, item := items[i-1], items[i]
+		prevCat, curCat := varCategory(prev.name), varCategory(item.name)
 
-		curOrder, curKnown := varAttrOrder[item.name]
-		prevOrder, prevKnown := varAttrOrder[prev.name]
-
-		if curKnown && prevKnown && curOrder < prevOrder {
+		// Category ordering: fixed < other < validation.
+		if curCat < prevCat {
 			msg := fmt.Sprintf(
-				"argument %q should come before %q in variable blocks (required order: type → default → description)",
+				"argument %q should come before %q in variable blocks",
+				item.name, prev.name,
+			)
+			if err := runner.EmitIssueWithFix(r, msg, item.nameRange, fix); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Within fixed-order group: type → default → description.
+		if curCat == varCatFixed && prevCat == varCatFixed {
+			if varFixedOrder[item.name] < varFixedOrder[prev.name] {
+				msg := fmt.Sprintf(
+					"argument %q should come before %q in variable blocks (required order: type → default → description)",
+					item.name, prev.name,
+				)
+				if err := runner.EmitIssueWithFix(r, msg, item.nameRange, fix); err != nil {
+					return err
+				}
+			}
+		}
+
+		// Within other group: alphabetical.
+		if curCat == varCatOther && prevCat == varCatOther && item.name < prev.name {
+			msg := fmt.Sprintf(
+				"argument %q is not sorted: it should come before %q",
 				item.name, prev.name,
 			)
 			if err := runner.EmitIssueWithFix(r, msg, item.nameRange, fix); err != nil {
@@ -147,11 +178,20 @@ func (r *TerraformSortedVariablesRule) checkVariable(runner tflint.Runner, block
 			}
 		}
 
-		if curKnown && prevKnown && gapHasBlankLine(src, prev, item) {
+		// No blank lines except before validation.
+		if curCat != varCatValidation && gapHasBlankLine(src, prev, item) {
 			msg := fmt.Sprintf(
 				"unexpected blank line before %q: variable block attributes should not be separated by blank lines",
 				item.name,
 			)
+			if err := runner.EmitIssueWithFix(r, msg, item.nameRange, fix); err != nil {
+				return err
+			}
+		}
+
+		// Blank line required before validation.
+		if curCat == varCatValidation && !gapHasBlankLine(src, prev, item) && item.startLine <= prev.endLine+1 {
+			msg := "missing blank line before \"validation\" block"
 			if err := runner.EmitIssueWithFix(r, msg, item.nameRange, fix); err != nil {
 				return err
 			}
