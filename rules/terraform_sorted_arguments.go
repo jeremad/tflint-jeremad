@@ -108,6 +108,10 @@ type bodyItem struct {
 	fullRange hcl.Range
 }
 
+// extendToLineEnd advances pos to the end of its current line, dropping
+// trailing whitespace. We use this on attribute expression-end positions so
+// that an inline trailing comment (e.g. `foo = bar # note`) is captured as
+// part of the attribute's text and travels with it during a reorder.
 func extendToLineEnd(src []byte, pos hcl.Pos) hcl.Pos {
 	i := pos.Byte
 	for i < len(src) && src[i] != '\n' {
@@ -124,10 +128,7 @@ func collectBodyItems(body *hclsyntax.Body, src []byte) []bodyItem {
 
 	for name, attr := range body.Attributes {
 		r := attr.Range()
-		exprEnd := attr.Expr.Range().End
-		if src != nil {
-			exprEnd = extendToLineEnd(src, exprEnd)
-		}
+		exprEnd := extendToLineEnd(src, attr.Expr.Range().End)
 		items = append(items, bodyItem{
 			name:      name,
 			category:  categorizeAttr(name, attr.Expr),
@@ -168,9 +169,14 @@ func collectBodyItems(body *hclsyntax.Body, src []byte) []bodyItem {
 // given the preceding item prev.
 //
 // Rules:
-//   - Any forward category transition requires a blank line.
+//   - Any forward category transition requires a blank line, except within
+//     the top-meta group (provider/count/for_each/source), which is one unit.
+//   - The body of a `dynamic` block (the magic `content` block) does not
+//     require a blank line before it on a forward transition.
 //   - Consecutive complex variables (lists/maps) each require a blank line.
-//   - Consecutive different-type nested blocks require a blank line.
+//   - Consecutive different-type nested blocks require a blank line. The
+//     `dynamic` block always gets its own blank line, even between two
+//     `dynamic` blocks (their content is intentionally distinct).
 //   - Consecutive lifecycle meta-arguments each require their own blank line.
 func needsBlankLineBefore(item, prev bodyItem) bool {
 	if item.category > prev.category {
@@ -200,6 +206,9 @@ func needsBlankLineBefore(item, prev bodyItem) bool {
 
 var errFixConflict = errors.New("fix conflict")
 
+// replaceTextOrConflict wraps Fixer.ReplaceText so callers can detect a
+// range conflict (the SDK returns an error when a fix range overlaps with
+// an already-applied fix) via errors.Is(err, errFixConflict).
 func replaceTextOrConflict(f tflint.Fixer, rng hcl.Range, text string) error {
 	if err := f.ReplaceText(rng, text); err != nil {
 		return errors.Join(errFixConflict, err)
@@ -207,6 +216,9 @@ func replaceTextOrConflict(f tflint.Fixer, rng hcl.Range, text string) error {
 	return nil
 }
 
+// applyFix runs fn and converts a fix-range conflict into ErrFixNotSupported,
+// so a single conflicting sub-fix downgrades the whole block fix gracefully
+// instead of failing the rule.
 func applyFix(f tflint.Fixer, fn func() error) error {
 	if err := fn(); err != nil {
 		if errors.Is(err, errFixConflict) {
@@ -233,62 +245,60 @@ func needsAlphaCheck(item, prev bodyItem) bool {
 // TerraformSortedArgumentsRule enforces the canonical argument ordering
 // described in the team's Terraform style guide.
 type TerraformSortedArgumentsRule struct {
-	tflint.DefaultRule
+	baseRule
 }
 
 func NewTerraformSortedArgumentsRule() *TerraformSortedArgumentsRule {
-	return &TerraformSortedArgumentsRule{}
-}
-
-func (r *TerraformSortedArgumentsRule) Name() string {
-	return "terraform_sorted_arguments"
-}
-
-func (r *TerraformSortedArgumentsRule) Enabled() bool {
-	return true
-}
-
-func (r *TerraformSortedArgumentsRule) Severity() tflint.Severity {
-	return tflint.WARNING
-}
-
-func (r *TerraformSortedArgumentsRule) Link() string {
-	return ""
+	return &TerraformSortedArgumentsRule{baseRule{name: "terraform_sorted_arguments"}}
 }
 
 func (r *TerraformSortedArgumentsRule) Check(runner tflint.Runner) error {
-	files, err := runner.GetFiles()
-	if err != nil {
-		return err
-	}
-	for _, file := range files {
-		if err := r.checkFile(runner, file); err != nil {
-			return err
-		}
-	}
-	return nil
+	return forEachFile(runner, func(file *hcl.File) error {
+		return r.checkFile(runner, file)
+	})
 }
 
-func blockHasViolations(items []bodyItem) bool {
-	for i, item := range items {
-		if i == 0 {
-			continue
-		}
-		prev := items[i-1]
+// argViolation describes a single ordering violation between two adjacent
+// items in a body. Computed once per block so that the recursion-skip logic
+// and the issue-emission loop share predicate evaluation.
+type argViolation struct {
+	item bodyItem
+	msg  string
+}
+
+func argViolations(items []bodyItem) []argViolation {
+	var out []argViolation
+	for i := 1; i < len(items); i++ {
+		prev, item := items[i-1], items[i]
+
 		if item.category < prev.category {
-			return true
+			out = append(out, argViolation{item, fmt.Sprintf(
+				"argument %q (%s) should come before %q (%s): %s",
+				item.name, catLabel[item.category],
+				prev.name, catLabel[prev.category],
+				orderingHint,
+			)})
 		}
 		if needsAlphaCheck(item, prev) && item.name < prev.name {
-			return true
+			out = append(out, argViolation{item, fmt.Sprintf(
+				"argument %q is not sorted: it should come before %q",
+				item.name, prev.name,
+			)})
 		}
 		if needsBlankLineBefore(item, prev) && item.startLine <= prev.endLine+1 {
-			return true
+			out = append(out, argViolation{item, fmt.Sprintf(
+				"missing blank line before %q (%s)",
+				item.name, catLabel[item.category],
+			)})
 		}
 		if prev.category <= catSource && item.category <= catSource && item.startLine > prev.endLine+1 {
-			return true
+			out = append(out, argViolation{item, fmt.Sprintf(
+				"unexpected blank line before %q: provider, count/for_each, and source should form a single unit",
+				item.name,
+			)})
 		}
 	}
-	return false
+	return out
 }
 
 func (r *TerraformSortedArgumentsRule) checkFile(runner tflint.Runner, file *hcl.File) error {
@@ -307,13 +317,10 @@ func (r *TerraformSortedArgumentsRule) checkFile(runner tflint.Runner, file *hcl
 	return nil
 }
 
-// extractCommentLines returns comment lines found in the gap text between two
-// items. The first line of the gap (remainder of the previous item's line) is
-// skipped so that inline comments stay with the preceding item.
-func isCommentLine(line string) bool {
-	return strings.HasPrefix(line, "#") || strings.HasPrefix(line, "//") || strings.HasPrefix(line, "/*")
-}
-
+// extractCommentLines returns the comment lines found between two body
+// items. The first split line — the remainder of the previous item's line
+// — is skipped so that an inline trailing comment stays attached to the
+// previous item rather than migrating to the next.
 func extractCommentLines(gap string) []string {
 	lines := strings.Split(gap, "\n")
 	var comments []string
@@ -333,7 +340,7 @@ func extractCommentLines(gap string) []string {
 			if strings.Contains(trimmed, "*/") {
 				inBlock = false
 			}
-		} else if strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "//") {
+		} else if startsLineComment(trimmed) {
 			comments = append(comments, trimmed)
 		}
 	}
@@ -347,7 +354,7 @@ func findCommentStart(gap string, pos hcl.Pos) hcl.Pos {
 	cur := pos
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if isCommentLine(trimmed) {
+		if startsAnyComment(trimmed) {
 			return cur
 		}
 		cur.Line++
@@ -363,28 +370,30 @@ type richItem struct {
 	text     []byte
 }
 
-func attachComments(items []bodyItem, f tflint.Fixer, bodyStart *hcl.Pos) []richItem {
+// attachComments walks items in source order and pairs each item with the
+// comment lines that appear before it. For the first item, the gap runs
+// from bodyStart (the position right after the body's opening `{`) up to
+// the item; we prepend a synthetic newline so that extractCommentLines's
+// "skip first line" rule (which exists to keep inline comments with the
+// previous item) does not eat the first real comment line.
+func attachComments(items []bodyItem, f tflint.Fixer, bodyStart hcl.Pos) []richItem {
 	rich := make([]richItem, len(items))
 	for i, item := range items {
-		var comments []string
-		var gapStart hcl.Pos
+		gapStart := bodyStart
 		if i > 0 {
 			gapStart = items[i-1].fullRange.End
-		} else if bodyStart != nil {
-			gapStart = *bodyStart
 		}
-		if gapStart.Byte > 0 || i > 0 {
-			gapRange := hcl.Range{
-				Filename: item.fullRange.Filename,
-				Start:    gapStart,
-				End:      item.fullRange.Start,
-			}
-			gap := string(f.TextAt(gapRange).Bytes)
-			if i == 0 {
-				comments = extractCommentLines("\n" + gap)
-			} else {
-				comments = extractCommentLines(gap)
-			}
+		gapRange := hcl.Range{
+			Filename: item.fullRange.Filename,
+			Start:    gapStart,
+			End:      item.fullRange.Start,
+		}
+		gap := string(f.TextAt(gapRange).Bytes)
+		var comments []string
+		if i == 0 {
+			comments = extractCommentLines("\n" + gap)
+		} else {
+			comments = extractCommentLines(gap)
 		}
 		rich[i] = richItem{bodyItem: item, comments: comments}
 	}
@@ -412,7 +421,12 @@ func writeItems(buf *strings.Builder, sorted []richItem, indent string, separato
 	}
 }
 
-func buildBlockFix(items []bodyItem, bodyStart *hcl.Pos) func(tflint.Fixer) error {
+// buildBlockFix returns a Fixer callback that rewrites a body's items in
+// canonical order. The output is intentionally not whitespace-perfect: the
+// SDK runs hclwrite.Format on every plugin's changes before persisting,
+// which re-indents and re-aligns `=` columns, so we leave alignment to the
+// formatter and focus on getting the structural layout right.
+func buildBlockFix(items []bodyItem, bodyStart hcl.Pos) func(tflint.Fixer) error {
 	return func(f tflint.Fixer) error {
 		return applyFix(f, func() error {
 			if len(items) < 2 {
@@ -441,12 +455,12 @@ func buildBlockFix(items []bodyItem, bodyStart *hcl.Pos) func(tflint.Fixer) erro
 			})
 
 			spanStart := items[0].fullRange.Start
-			if len(rich[0].comments) > 0 && bodyStart != nil {
+			if len(rich[0].comments) > 0 {
 				spanStart = findCommentStart(string(f.TextAt(hcl.Range{
 					Filename: items[0].fullRange.Filename,
-					Start:    *bodyStart,
+					Start:    bodyStart,
 					End:      items[0].fullRange.Start,
-				}).Bytes), *bodyStart)
+				}).Bytes), bodyStart)
 			}
 
 			spanRange := hcl.Range{
@@ -461,70 +475,25 @@ func buildBlockFix(items []bodyItem, bodyStart *hcl.Pos) func(tflint.Fixer) erro
 
 func (r *TerraformSortedArgumentsRule) checkBlock(runner tflint.Runner, block *hclsyntax.Block, src []byte) error {
 	items := collectBodyItems(block.Body, src)
-	bodyStart := block.OpenBraceRange.End
-	hasViolations := blockHasViolations(items)
-	fix := buildBlockFix(items, &bodyStart)
+	violations := argViolations(items)
 
-	for i, item := range items {
-		if i == 0 {
-			continue
-		}
-		prev := items[i-1]
-
-		// Rule 1 — category ordering.
-		if item.category < prev.category {
-			msg := fmt.Sprintf(
-				"argument %q (%s) should come before %q (%s): %s",
-				item.name, catLabel[item.category],
-				prev.name, catLabel[prev.category],
-				orderingHint,
-			)
-			if err := runner.EmitIssueWithFix(r, msg, item.nameRange, fix); err != nil {
-				return err
-			}
-		}
-
-		// Rule 2 — alphabetical order within the same category.
-		if needsAlphaCheck(item, prev) && item.name < prev.name {
-			msg := fmt.Sprintf(
-				"argument %q is not sorted: it should come before %q",
-				item.name, prev.name,
-			)
-			if err := runner.EmitIssueWithFix(r, msg, item.nameRange, fix); err != nil {
-				return err
-			}
-		}
-
-		// Rule 3 — blank line requirement.
-		if needsBlankLineBefore(item, prev) && item.startLine <= prev.endLine+1 {
-			msg := fmt.Sprintf(
-				"missing blank line before %q (%s)",
-				item.name, catLabel[item.category],
-			)
-			if err := runner.EmitIssueWithFix(r, msg, item.nameRange, fix); err != nil {
-				return err
-			}
-		}
-
-		// Rule 4 — no blank line within the top-meta group (provider/count/for_each/source).
-		if prev.category <= catSource && item.category <= catSource && item.startLine > prev.endLine+1 {
-			msg := fmt.Sprintf(
-				"unexpected blank line before %q: provider, count/for_each, and source should form a single unit",
-				item.name,
-			)
-			if err := runner.EmitIssueWithFix(r, msg, item.nameRange, fix); err != nil {
-				return err
-			}
-		}
-	}
-
-	if !hasViolations {
+	if len(violations) == 0 {
+		// No violation here, so the block won't be reflowed. Recurse
+		// into nested blocks; if a parent reflow were going to happen,
+		// it would supersede any child fix anyway.
 		for _, nested := range block.Body.Blocks {
 			if err := r.checkBlock(runner, nested, src); err != nil {
 				return err
 			}
 		}
+		return nil
 	}
 
+	fix := buildBlockFix(items, block.OpenBraceRange.End)
+	for _, v := range violations {
+		if err := runner.EmitIssueWithFix(r, v.msg, v.item.nameRange, fix); err != nil {
+			return err
+		}
+	}
 	return nil
 }

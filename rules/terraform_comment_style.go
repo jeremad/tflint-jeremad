@@ -9,45 +9,17 @@ import (
 )
 
 type TerraformCommentStyleRule struct {
-	tflint.DefaultRule
+	baseRule
 }
 
 func NewTerraformCommentStyleRule() *TerraformCommentStyleRule {
-	return &TerraformCommentStyleRule{}
-}
-
-func (r *TerraformCommentStyleRule) Name() string {
-	return "terraform_comment_style"
-}
-
-func (r *TerraformCommentStyleRule) Enabled() bool {
-	return true
-}
-
-func (r *TerraformCommentStyleRule) Severity() tflint.Severity {
-	return tflint.WARNING
-}
-
-func (r *TerraformCommentStyleRule) Link() string {
-	return ""
+	return &TerraformCommentStyleRule{baseRule{name: "terraform_comment_style"}}
 }
 
 func (r *TerraformCommentStyleRule) Check(runner tflint.Runner) error {
-	files, err := runner.GetFiles()
-	if err != nil {
-		return err
-	}
-	for _, file := range files {
-		if err := r.checkFile(runner, file); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func isLineComment(line string) bool {
-	trimmed := strings.TrimSpace(line)
-	return strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "//")
+	return forEachFile(runner, func(file *hcl.File) error {
+		return r.checkFile(runner, file)
+	})
 }
 
 func stripCommentPrefix(line string) string {
@@ -103,16 +75,9 @@ func (r *TerraformCommentStyleRule) checkFile(runner tflint.Runner, file *hcl.Fi
 		return nil
 	}
 
-	src := file.Bytes
-	lines := strings.Split(string(src), "\n")
+	lines := strings.Split(string(file.Bytes), "\n")
 	filename := body.SrcRange.Filename
-
-	lineOffsets := make([]int, len(lines))
-	offset := 0
-	for i, line := range lines {
-		lineOffsets[i] = offset
-		offset += len(line) + 1
-	}
+	lineOffsets := computeLineOffsets(lines)
 
 	emitRun := func(runStart, runEnd int) error {
 		commentLines := lines[runStart:runEnd]
@@ -133,10 +98,20 @@ func (r *TerraformCommentStyleRule) checkFile(runner tflint.Runner, file *hcl.Fi
 		)
 	}
 
+	// A run of consecutive line-comment lines becomes a candidate for
+	// conversion to a block comment when it is at least 3 lines long, or
+	// at least 2 lines long if any of them uses // (since // has a
+	// dedicated single-line rule we want to nudge users away from).
 	runStart := -1
 	hasSlash := false
+	threshold := func() int {
+		if hasSlash {
+			return 2
+		}
+		return 3
+	}
 	for i, line := range lines {
-		if isLineComment(line) {
+		if startsLineComment(strings.TrimSpace(line)) {
 			if runStart == -1 {
 				runStart = i
 				hasSlash = false
@@ -144,29 +119,19 @@ func (r *TerraformCommentStyleRule) checkFile(runner tflint.Runner, file *hcl.Fi
 			if strings.HasPrefix(strings.TrimSpace(line), "//") {
 				hasSlash = true
 			}
-		} else {
-			threshold := 3
-			if hasSlash {
-				threshold = 2
-			}
-			if runStart != -1 && i-runStart >= threshold {
-				if err := emitRun(runStart, i); err != nil {
-					return err
-				}
-			}
-			runStart = -1
+			continue
 		}
-	}
-
-	if runStart != -1 {
-		threshold := 3
-		if hasSlash {
-			threshold = 2
-		}
-		if len(lines)-runStart >= threshold {
-			if err := emitRun(runStart, len(lines)); err != nil {
+		if runStart != -1 && i-runStart >= threshold() {
+			if err := emitRun(runStart, i); err != nil {
 				return err
 			}
+		}
+		runStart = -1
+	}
+
+	if runStart != -1 && len(lines)-runStart >= threshold() {
+		if err := emitRun(runStart, len(lines)); err != nil {
+			return err
 		}
 	}
 

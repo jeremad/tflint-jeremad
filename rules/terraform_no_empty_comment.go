@@ -9,40 +9,17 @@ import (
 )
 
 type TerraformNoEmptyCommentRule struct {
-	tflint.DefaultRule
+	baseRule
 }
 
 func NewTerraformNoEmptyCommentRule() *TerraformNoEmptyCommentRule {
-	return &TerraformNoEmptyCommentRule{}
-}
-
-func (r *TerraformNoEmptyCommentRule) Name() string {
-	return "terraform_no_empty_comment"
-}
-
-func (r *TerraformNoEmptyCommentRule) Enabled() bool {
-	return true
-}
-
-func (r *TerraformNoEmptyCommentRule) Severity() tflint.Severity {
-	return tflint.WARNING
-}
-
-func (r *TerraformNoEmptyCommentRule) Link() string {
-	return ""
+	return &TerraformNoEmptyCommentRule{baseRule{name: "terraform_no_empty_comment"}}
 }
 
 func (r *TerraformNoEmptyCommentRule) Check(runner tflint.Runner) error {
-	files, err := runner.GetFiles()
-	if err != nil {
-		return err
-	}
-	for _, file := range files {
-		if err := r.checkFile(runner, file); err != nil {
-			return err
-		}
-	}
-	return nil
+	return forEachFile(runner, func(file *hcl.File) error {
+		return r.checkFile(runner, file)
+	})
 }
 
 func isEmptyComment(line string) bool {
@@ -56,39 +33,44 @@ func (r *TerraformNoEmptyCommentRule) checkFile(runner tflint.Runner, file *hcl.
 		return nil
 	}
 
-	src := file.Bytes
-	lines := strings.Split(string(src), "\n")
+	lines := strings.Split(string(file.Bytes), "\n")
 	filename := body.SrcRange.Filename
+	lineOffsets := computeLineOffsets(lines)
 
-	lineOffsets := make([]int, len(lines))
-	offset := 0
-	for i, line := range lines {
-		lineOffsets[i] = offset
-		offset += len(line) + 1
-	}
-
-	for i, line := range lines {
-		if !isEmptyComment(line) {
+	// Coalesce runs of consecutive empty comments into a single fix so that
+	// applying one fix cannot conflict with an adjacent one.
+	for i := 0; i < len(lines); {
+		if !isEmptyComment(lines[i]) {
+			i++
 			continue
 		}
+		runStart := i
+		for i < len(lines) && isEmptyComment(lines[i]) {
+			i++
+		}
+		runEnd := i // exclusive
 
-		byteStart := lineOffsets[i]
-		byteEnd := byteStart + len(line)
-		if i+1 < len(lines) {
-			byteEnd++
+		byteStart := lineOffsets[runStart]
+		byteEnd := lineOffsets[runEnd-1] + len(lines[runEnd-1])
+		if runEnd < len(lines) {
+			byteEnd++ // consume the trailing newline
 		}
 
 		issueRange := hcl.Range{
 			Filename: filename,
-			Start:    hcl.Pos{Line: i + 1, Column: 1},
-			End:      hcl.Pos{Line: i + 2, Column: 1},
+			Start:    hcl.Pos{Line: runStart + 1, Column: 1},
+			End:      hcl.Pos{Line: runEnd + 1, Column: 1},
 		}
 
+		// Loop-local copies are unnecessary under Go 1.22 (per-iteration
+		// scope), but we shadow anyway so the closure is obviously safe
+		// regardless of toolchain.
+		filename, byteStart, byteEnd, runStart, runEnd := filename, byteStart, byteEnd, runStart, runEnd
 		fix := func(f tflint.Fixer) error {
 			rng := hcl.Range{
 				Filename: filename,
-				Start:    hcl.Pos{Line: i + 1, Column: 1, Byte: byteStart},
-				End:      hcl.Pos{Line: i + 2, Column: 1, Byte: byteEnd},
+				Start:    hcl.Pos{Line: runStart + 1, Column: 1, Byte: byteStart},
+				End:      hcl.Pos{Line: runEnd + 1, Column: 1, Byte: byteEnd},
 			}
 			return replaceTextOrConflict(f, rng, "")
 		}

@@ -109,6 +109,28 @@ locals {}
 `,
 		},
 		{
+			name: "adjacent empty comments coalesce into one issue",
+			config: `
+#
+//
+locals {}
+`,
+			issues: helper.Issues{
+				{
+					Rule:    rule,
+					Message: "empty comments should be removed",
+					Range: hcl.Range{
+						Filename: "main.tf",
+						Start:    hcl.Pos{Line: 2, Column: 1},
+						End:      hcl.Pos{Line: 4, Column: 1},
+					},
+				},
+			},
+			fixed: `
+locals {}
+`,
+		},
+		{
 			name: "block comment with content - no issues",
 			config: `
 /* something */

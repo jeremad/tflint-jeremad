@@ -1,12 +1,17 @@
 # tflint-ruleset-jeremad
 
-A [TFLint](https://github.com/terraform-linters/tflint) ruleset plugin that enforces a canonical argument ordering style in Terraform configuration files.
+A [TFLint](https://github.com/terraform-linters/tflint) ruleset plugin that enforces a canonical argument ordering and comment style in Terraform configuration files.
 
 ## Rules
 
 | Rule | Description | Severity |
 |------|-------------|----------|
 | [terraform_sorted_arguments](rules/terraform_sorted_arguments.go) | Enforces canonical argument ordering within blocks | Warning |
+| [terraform_sorted_variables](rules/terraform_sorted_variables.go) | Enforces `type → default → description` ordering inside `variable` blocks | Warning |
+| [terraform_block_comment_format](rules/terraform_block_comment_format.go) | Enforces multi-line block-comment formatting (`/*` on its own line, aligned `*` body, `*/` on its own line) | Warning |
+| [terraform_comment_style](rules/terraform_comment_style.go) | Converts long runs of consecutive `#` / `//` line comments into a single block comment | Warning |
+| [terraform_single_line_comment_style](rules/terraform_single_line_comment_style.go) | Rewrites single-line `/* … */` and `// …` comments to `# …` | Warning |
+| [terraform_no_empty_comment](rules/terraform_no_empty_comment.go) | Removes empty `#`, `//`, `/**/`, and `/* */` comments | Warning |
 
 ### `terraform_sorted_arguments`
 
@@ -19,6 +24,17 @@ Arguments inside a block must appear in the following order, top to bottom:
 5. **Complex variables** — lists (`[…]`) and maps (`{…}`); sorted alphabetically, each separated from the previous group by a blank line
 6. **Nested blocks** — HCL sub-blocks; separated by a blank line, sorted alphabetically (consecutive blocks of the same type may be grouped without a blank line between them)
 7. **Lifecycle meta-arguments** — `lifecycle`, `depends_on`; each preceded by a blank line
+
+### How the comment rules interact
+
+The four comment rules cooperate; they do not oscillate, but the chain is worth knowing:
+
+- `terraform_no_empty_comment` removes empty comments first.
+- `terraform_single_line_comment_style` rewrites single-line `/* … */` and `// …` to `# …`.
+- `terraform_comment_style` converts long runs of consecutive `#`/`//` line comments (≥ 3 lines, or ≥ 2 if any are `//`) into a single multi-line block comment.
+- `terraform_block_comment_format` enforces the canonical multi-line block-comment shape on the result.
+
+The single-line rule only triggers on one-line `/* … */` forms, so a multi-line block created by `terraform_comment_style` is not converted back. Net effect: short stretches of comments stay as `#`, longer ones become block comments.
 
 ## Installation
 
