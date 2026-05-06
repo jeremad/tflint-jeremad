@@ -9,40 +9,17 @@ import (
 )
 
 type TerraformSingleLineCommentStyleRule struct {
-	tflint.DefaultRule
+	baseRule
 }
 
 func NewTerraformSingleLineCommentStyleRule() *TerraformSingleLineCommentStyleRule {
-	return &TerraformSingleLineCommentStyleRule{}
-}
-
-func (r *TerraformSingleLineCommentStyleRule) Name() string {
-	return "terraform_single_line_comment_style"
-}
-
-func (r *TerraformSingleLineCommentStyleRule) Enabled() bool {
-	return true
-}
-
-func (r *TerraformSingleLineCommentStyleRule) Severity() tflint.Severity {
-	return tflint.WARNING
-}
-
-func (r *TerraformSingleLineCommentStyleRule) Link() string {
-	return ""
+	return &TerraformSingleLineCommentStyleRule{baseRule{name: "terraform_single_line_comment_style"}}
 }
 
 func (r *TerraformSingleLineCommentStyleRule) Check(runner tflint.Runner) error {
-	files, err := runner.GetFiles()
-	if err != nil {
-		return err
-	}
-	for _, file := range files {
-		if err := r.checkFile(runner, file); err != nil {
-			return err
-		}
-	}
-	return nil
+	return forEachFile(runner, func(file *hcl.File) error {
+		return r.checkFile(runner, file)
+	})
 }
 
 func (r *TerraformSingleLineCommentStyleRule) checkFile(runner tflint.Runner, file *hcl.File) error {
@@ -51,16 +28,9 @@ func (r *TerraformSingleLineCommentStyleRule) checkFile(runner tflint.Runner, fi
 		return nil
 	}
 
-	src := file.Bytes
-	lines := strings.Split(string(src), "\n")
+	lines := strings.Split(string(file.Bytes), "\n")
 	filename := body.SrcRange.Filename
-
-	lineOffsets := make([]int, len(lines))
-	offset := 0
-	for i, line := range lines {
-		lineOffsets[i] = offset
-		offset += len(line) + 1
-	}
+	lineOffsets := computeLineOffsets(lines)
 
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
@@ -103,6 +73,10 @@ func (r *TerraformSingleLineCommentStyleRule) checkFile(runner tflint.Runner, fi
 			End:      hcl.Pos{Line: i + 2, Column: 1},
 		}
 
+		// Loop-local copies are unnecessary under Go 1.22 (per-iteration
+		// scope), but we shadow anyway so the closure is obviously safe
+		// regardless of toolchain.
+		i, line, byteStart, byteEnd, replacement := i, line, byteStart, byteEnd, replacement
 		fix := func(f tflint.Fixer) error {
 			rng := hcl.Range{
 				Filename: filename,

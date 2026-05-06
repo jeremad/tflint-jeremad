@@ -9,40 +9,17 @@ import (
 )
 
 type TerraformBlockCommentFormatRule struct {
-	tflint.DefaultRule
+	baseRule
 }
 
 func NewTerraformBlockCommentFormatRule() *TerraformBlockCommentFormatRule {
-	return &TerraformBlockCommentFormatRule{}
-}
-
-func (r *TerraformBlockCommentFormatRule) Name() string {
-	return "terraform_block_comment_format"
-}
-
-func (r *TerraformBlockCommentFormatRule) Enabled() bool {
-	return true
-}
-
-func (r *TerraformBlockCommentFormatRule) Severity() tflint.Severity {
-	return tflint.WARNING
-}
-
-func (r *TerraformBlockCommentFormatRule) Link() string {
-	return ""
+	return &TerraformBlockCommentFormatRule{baseRule{name: "terraform_block_comment_format"}}
 }
 
 func (r *TerraformBlockCommentFormatRule) Check(runner tflint.Runner) error {
-	files, err := runner.GetFiles()
-	if err != nil {
-		return err
-	}
-	for _, file := range files {
-		if err := r.checkFile(runner, file); err != nil {
-			return err
-		}
-	}
-	return nil
+	return forEachFile(runner, func(file *hcl.File) error {
+		return r.checkFile(runner, file)
+	})
 }
 
 type blockComment struct {
@@ -90,6 +67,15 @@ func findBlockComments(lines []string) []blockComment {
 	return blocks
 }
 
+// stripBlockCommentContent extracts the human-readable text from one line of
+// a block comment, regardless of where in the comment the line appears.
+//
+// Cases are checked in priority order, and order matters:
+//  1. /** ...    — javadoc-style opener (must be checked before /*)
+//  2. /* ...     — regular opener
+//  3. * ...      — body line with leading star and space
+//  4. *  /  ""   — body line that is bare star or empty
+//  5. fallback   — strip any leading lone star and return what remains
 func stripBlockCommentContent(line string) string {
 	trimmed := strings.TrimSpace(line)
 	trimmed = strings.TrimSuffix(trimmed, "*/")
@@ -210,16 +196,9 @@ func (r *TerraformBlockCommentFormatRule) checkFile(runner tflint.Runner, file *
 		return nil
 	}
 
-	src := file.Bytes
-	lines := strings.Split(string(src), "\n")
+	lines := strings.Split(string(file.Bytes), "\n")
 	filename := body.SrcRange.Filename
-
-	lineOffsets := make([]int, len(lines))
-	offset := 0
-	for i, line := range lines {
-		lineOffsets[i] = offset
-		offset += len(line) + 1
-	}
+	lineOffsets := computeLineOffsets(lines)
 
 	blocks := findBlockComments(lines)
 	for _, bc := range blocks {

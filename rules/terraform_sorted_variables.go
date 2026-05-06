@@ -17,40 +17,17 @@ var varAttrOrder = map[string]int{
 }
 
 type TerraformSortedVariablesRule struct {
-	tflint.DefaultRule
+	baseRule
 }
 
 func NewTerraformSortedVariablesRule() *TerraformSortedVariablesRule {
-	return &TerraformSortedVariablesRule{}
-}
-
-func (r *TerraformSortedVariablesRule) Name() string {
-	return "terraform_sorted_variables"
-}
-
-func (r *TerraformSortedVariablesRule) Enabled() bool {
-	return true
-}
-
-func (r *TerraformSortedVariablesRule) Severity() tflint.Severity {
-	return tflint.WARNING
-}
-
-func (r *TerraformSortedVariablesRule) Link() string {
-	return ""
+	return &TerraformSortedVariablesRule{baseRule{name: "terraform_sorted_variables"}}
 }
 
 func (r *TerraformSortedVariablesRule) Check(runner tflint.Runner) error {
-	files, err := runner.GetFiles()
-	if err != nil {
-		return err
-	}
-	for _, file := range files {
-		if err := r.checkFile(runner, file); err != nil {
-			return err
-		}
-	}
-	return nil
+	return forEachFile(runner, func(file *hcl.File) error {
+		return r.checkFile(runner, file)
+	})
 }
 
 func (r *TerraformSortedVariablesRule) checkFile(runner tflint.Runner, file *hcl.File) error {
@@ -69,7 +46,11 @@ func (r *TerraformSortedVariablesRule) checkFile(runner tflint.Runner, file *hcl
 	return nil
 }
 
-func buildVariableFix(items []bodyItem, bodyStart *hcl.Pos) func(tflint.Fixer) error {
+// buildVariableFix returns a Fixer callback that rewrites a variable block's
+// attributes in canonical order (type → default → description, then any
+// other attributes in source order). Like buildBlockFix, the output relies
+// on hclwrite.Format upstream to re-align whitespace.
+func buildVariableFix(items []bodyItem, bodyStart hcl.Pos) func(tflint.Fixer) error {
 	return func(f tflint.Fixer) error {
 		return applyFix(f, func() error {
 			if len(items) < 2 {
@@ -80,6 +61,8 @@ func buildVariableFix(items []bodyItem, bodyStart *hcl.Pos) func(tflint.Fixer) e
 
 			sorted := make([]richItem, len(rich))
 			copy(sorted, rich)
+			// Stable sort: among attributes not in varAttrOrder we
+			// preserve source order.
 			sort.SliceStable(sorted, func(i, j int) bool {
 				iOrder, iKnown := varAttrOrder[sorted[i].name]
 				jOrder, jKnown := varAttrOrder[sorted[j].name]
@@ -108,12 +91,12 @@ func buildVariableFix(items []bodyItem, bodyStart *hcl.Pos) func(tflint.Fixer) e
 			})
 
 			spanStart := items[0].fullRange.Start
-			if len(rich[0].comments) > 0 && bodyStart != nil {
+			if len(rich[0].comments) > 0 {
 				spanStart = findCommentStart(string(f.TextAt(hcl.Range{
 					Filename: items[0].fullRange.Filename,
-					Start:    *bodyStart,
+					Start:    bodyStart,
 					End:      items[0].fullRange.Start,
-				}).Bytes), *bodyStart)
+				}).Bytes), bodyStart)
 			}
 
 			spanRange := hcl.Range{
@@ -146,14 +129,10 @@ func gapHasBlankLine(src []byte, prev, item bodyItem) bool {
 
 func (r *TerraformSortedVariablesRule) checkVariable(runner tflint.Runner, block *hclsyntax.Block, src []byte) error {
 	items := collectBodyItems(block.Body, src)
-	bodyStart := block.OpenBraceRange.End
-	fix := buildVariableFix(items, &bodyStart)
+	fix := buildVariableFix(items, block.OpenBraceRange.End)
 
-	for i, item := range items {
-		if i == 0 {
-			continue
-		}
-		prev := items[i-1]
+	for i := 1; i < len(items); i++ {
+		prev, item := items[i-1], items[i]
 
 		curOrder, curKnown := varAttrOrder[item.name]
 		prevOrder, prevKnown := varAttrOrder[prev.name]
@@ -168,9 +147,7 @@ func (r *TerraformSortedVariablesRule) checkVariable(runner tflint.Runner, block
 			}
 		}
 
-		_, itemIsVarAttr := varAttrOrder[item.name]
-		_, prevIsVarAttr := varAttrOrder[prev.name]
-		if itemIsVarAttr && prevIsVarAttr && gapHasBlankLine(src, prev, item) {
+		if curKnown && prevKnown && gapHasBlankLine(src, prev, item) {
 			msg := fmt.Sprintf(
 				"unexpected blank line before %q: variable block attributes should not be separated by blank lines",
 				item.name,
