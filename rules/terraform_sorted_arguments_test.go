@@ -1786,6 +1786,66 @@ resource "google_storage_bucket_object" "test" {
 `,
 		},
 		{
+			name: "single-line block comment between args preserved when reordering",
+			config: `
+resource "example" "test" {
+  apple = "1"
+  /* hint */
+  zoo = "2"
+  banana = "3"
+}
+`,
+			issues: helper.Issues{
+				{
+					Rule:    rule,
+					Message: `argument "banana" is not sorted: it should come before "zoo"`,
+					Range: hcl.Range{
+						Filename: "main.tf",
+						Start:    hcl.Pos{Line: 6, Column: 3},
+						End:      hcl.Pos{Line: 6, Column: 9},
+					},
+				},
+			},
+			fixed: `
+resource "example" "test" {
+  apple  = "1"
+  banana = "3"
+  /* hint */
+  zoo = "2"
+}
+`,
+		},
+		{
+			name: "leading comment on first sorted item preserved",
+			config: `
+resource "example" "test" {
+  # hello
+  apple = "1"
+  zoo = "2"
+  banana = "3"
+}
+`,
+			issues: helper.Issues{
+				{
+					Rule:    rule,
+					Message: `argument "banana" is not sorted: it should come before "zoo"`,
+					Range: hcl.Range{
+						Filename: "main.tf",
+						Start:    hcl.Pos{Line: 6, Column: 3},
+						End:      hcl.Pos{Line: 6, Column: 9},
+					},
+				},
+			},
+			fixed: `
+resource "example" "test" {
+  # hello
+  apple  = "1"
+  banana = "3"
+  zoo    = "2"
+}
+`,
+		},
+		{
 			name: "content block in dynamic does not need blank line",
 			config: `
 resource "example" "test" {
