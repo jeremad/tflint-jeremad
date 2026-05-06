@@ -13,6 +13,10 @@ func main() {
 			Name:    "jeremad",
 			Version: "0.2.0",
 			Rules: []tflint.Rule{
+				rules.NewTerraformBlockCommentFormatRule(),
+				rules.NewTerraformCommentStyleRule(),
+				rules.NewTerraformNoEmptyCommentRule(),
+				rules.NewTerraformSingleLineCommentStyleRule(),
 				rules.NewTerraformSortedArgumentsRule(),
 				rules.NewTerraformSortedVariablesRule(),
 			},
