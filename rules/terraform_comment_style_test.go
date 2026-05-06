@@ -224,6 +224,88 @@ locals {}
 `,
 		},
 		{
+			name: "three consecutive # comments without space after marker",
+			config: `
+#Line 1
+#Line 2
+#Line 3
+locals {}
+`,
+			issues: helper.Issues{
+				{
+					Rule:    rule,
+					Message: "consecutive line comments should use block comment syntax (/* ... */)",
+					Range: hcl.Range{
+						Filename: "main.tf",
+						Start:    hcl.Pos{Line: 2, Column: 1},
+						End:      hcl.Pos{Line: 5, Column: 1},
+					},
+				},
+			},
+			fixed: `
+/*
+ * Line 1
+ * Line 2
+ * Line 3
+ */
+locals {}
+`,
+		},
+		{
+			name: "two consecutive // comments without space after marker",
+			config: `
+//Line 1
+//Line 2
+locals {}
+`,
+			issues: helper.Issues{
+				{
+					Rule:    rule,
+					Message: "consecutive line comments should use block comment syntax (/* ... */)",
+					Range: hcl.Range{
+						Filename: "main.tf",
+						Start:    hcl.Pos{Line: 2, Column: 1},
+						End:      hcl.Pos{Line: 4, Column: 1},
+					},
+				},
+			},
+			fixed: `
+/*
+ * Line 1
+ * Line 2
+ */
+locals {}
+`,
+		},
+		{
+			name: "consecutive # comments with empty markers",
+			config: `
+# Line 1
+#
+# Line 3
+locals {}
+`,
+			issues: helper.Issues{
+				{
+					Rule:    rule,
+					Message: "consecutive line comments should use block comment syntax (/* ... */)",
+					Range: hcl.Range{
+						Filename: "main.tf",
+						Start:    hcl.Pos{Line: 2, Column: 1},
+						End:      hcl.Pos{Line: 5, Column: 1},
+					},
+				},
+			},
+			fixed: `
+/*
+ * Line 1
+ *
+ * Line 3
+ */
+locals {}
+`,
+		},
+		{
 			name: "indented three consecutive comments - preserves indentation",
 			config: `
 resource "example" "test" {

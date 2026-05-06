@@ -249,6 +249,11 @@ locals {}
 			issues: helper.Issues{},
 		},
 		{
+			name:   "truly blank line in middle - no issues",
+			config: "\n/*\n * Line 1\n\n * Line 2\n */\nlocals {}\n",
+			issues: helper.Issues{},
+		},
+		{
 			name: "/** with trailing empty line and middle empty line",
 			config: `
 /**

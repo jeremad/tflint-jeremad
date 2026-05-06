@@ -280,6 +280,68 @@ variable "max_clients" {
 `,
 		},
 		{
+			name: "default before type with unknown attrs - reorders known and separates unknown",
+			config: `
+variable "name" {
+  default   = "value"
+  type      = string
+  sensitive = true
+  nullable  = false
+}
+`,
+			issues: helper.Issues{
+				{
+					Rule:    rule,
+					Message: `argument "type" should come before "default" in variable blocks (required order: type → default → description)`,
+					Range: hcl.Range{
+						Filename: "main.tf",
+						Start:    hcl.Pos{Line: 4, Column: 3},
+						End:      hcl.Pos{Line: 4, Column: 7},
+					},
+				},
+			},
+			fixed: `
+variable "name" {
+  type    = string
+  default = "value"
+
+  sensitive = true
+
+  nullable = false
+}
+`,
+		},
+		{
+			name: "leading comment on first attribute travels with sorted-first item",
+			config: `
+variable "name" {
+  # important note
+  type        = string
+  description = "A var"
+  default     = "value"
+}
+`,
+			issues: helper.Issues{
+				{
+					Rule:    rule,
+					Message: `argument "default" should come before "description" in variable blocks (required order: type → default → description)`,
+					Range: hcl.Range{
+						Filename: "main.tf",
+						Start:    hcl.Pos{Line: 6, Column: 3},
+						End:      hcl.Pos{Line: 6, Column: 10},
+					},
+				},
+			},
+			fixed: `
+variable "name" {
+  # important note
+  type        = string
+  default     = "value"
+  description = "A var"
+}
+`,
+		},
+		{
 			name: "variable with validation block - no issues",
 			config: `
 variable "name" {
