@@ -63,6 +63,7 @@ var complexFuncs = map[string]bool{
 	"concat":       true,
 	"jsonencode":   true,
 	"merge":        true,
+	"setsubtract":  true,
 	"templatefile": true,
 	"toset":        true,
 }
