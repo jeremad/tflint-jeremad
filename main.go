@@ -15,6 +15,7 @@ func main() {
 			Rules: []tflint.Rule{
 				rules.NewTerraformBlockCommentFormatRule(),
 				rules.NewTerraformCommentStyleRule(),
+				rules.NewTerraformForbiddenResourcesRule(),
 				rules.NewTerraformNoEmptyCommentRule(),
 				rules.NewTerraformSingleLineCommentStyleRule(),
 				rules.NewTerraformSortedArgumentsRule(),
