@@ -7,7 +7,7 @@ A [TFLint](https://github.com/terraform-linters/tflint) ruleset plugin that enfo
 | Rule | Description | Severity |
 |------|-------------|----------|
 | [terraform_sorted_arguments](rules/terraform_sorted_arguments.go) | Enforces canonical argument ordering within blocks | Warning |
-| [terraform_sorted_variables](rules/terraform_sorted_variables.go) | Enforces `type → default → description` ordering inside `variable` blocks | Warning |
+| [terraform_sorted_variables](rules/terraform_sorted_variables.go) | Enforces canonical ordering inside `variable` blocks (`type → default → description`, then other fields alphabetically, then `validation`) | Warning |
 | [terraform_block_comment_format](rules/terraform_block_comment_format.go) | Enforces multi-line block-comment formatting (`/*` on its own line, aligned `*` body, `*/` on its own line) | Warning |
 | [terraform_comment_style](rules/terraform_comment_style.go) | Converts long runs of consecutive `#` / `//` line comments into a single block comment | Warning |
 | [terraform_single_line_comment_style](rules/terraform_single_line_comment_style.go) | Rewrites single-line `/* … */` and `// …` comments to `# …` | Warning |
@@ -22,9 +22,17 @@ Arguments inside a block must appear in the following order, top to bottom:
 2. **Instantiation meta-arguments** — `count`, `for_each`
 3. **`source`** — module source (modules only)
 4. **Primitive variables** — booleans, numbers, strings, references, function calls; sorted alphabetically within this group
-5. **Complex variables** — lists (`[…]`) and maps (`{…}`); sorted alphabetically, each separated from the previous group by a blank line
+5. **Complex variables** — lists (`[…]`), maps (`{…}`), `for` expressions, multi-line expressions (heredocs), and calls to complex-producing functions (`compact`, `concat`, `jsonencode`, `merge`, `setsubtract`, `templatefile`, `toset`); sorted alphabetically, each separated from the previous group by a blank line
 6. **Nested blocks** — HCL sub-blocks; separated by a blank line, sorted alphabetically (consecutive blocks of the same type may be grouped without a blank line between them)
 7. **Lifecycle meta-arguments** — `lifecycle`, `depends_on`; each preceded by a blank line
+
+### `terraform_sorted_variables`
+
+Attributes inside a `variable` block must appear in the following order:
+
+1. **`type`**, **`default`**, **`description`** — in this fixed order, no blank lines between them
+2. **Other fields** — `const`, `deprecated`, `ephemeral`, `nullable`, `sensitive` — sorted alphabetically, no blank lines
+3. **`validation`** block — always last, preceded by a blank line
 
 ### `terraform_forbidden_resources`
 

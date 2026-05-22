@@ -1846,6 +1846,33 @@ resource "example" "test" {
 `,
 		},
 		{
+			name: "setsubtract treated as complex type",
+			config: `
+resource "example" "test" {
+  name = "test"
+  members = setsubtract(var.all_users, var.excluded)
+}
+`,
+			issues: helper.Issues{
+				{
+					Rule:    rule,
+					Message: `missing blank line before "members" (complex variable (list/map))`,
+					Range: hcl.Range{
+						Filename: "main.tf",
+						Start:    hcl.Pos{Line: 4, Column: 3},
+						End:      hcl.Pos{Line: 4, Column: 10},
+					},
+				},
+			},
+			fixed: `
+resource "example" "test" {
+  name = "test"
+
+  members = setsubtract(var.all_users, var.excluded)
+}
+`,
+		},
+		{
 			name: "content block in dynamic does not need blank line",
 			config: `
 resource "example" "test" {
