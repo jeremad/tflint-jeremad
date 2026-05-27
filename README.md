@@ -12,7 +12,7 @@ A [TFLint](https://github.com/terraform-linters/tflint) ruleset plugin that enfo
 | [terraform_comment_style](rules/terraform_comment_style.go) | Converts long runs of consecutive `#` / `//` line comments into a single block comment | Warning |
 | [terraform_single_line_comment_style](rules/terraform_single_line_comment_style.go) | Rewrites single-line `/* … */` and `// …` comments to `# …` | Warning |
 | [terraform_no_empty_comment](rules/terraform_no_empty_comment.go) | Removes empty `#`, `//`, `/**/`, and `/* */` comments | Warning |
-| [terraform_forbidden_resources](rules/terraform_forbidden_resources.go) | Forbids use of disallowed `resource` types (currently `google_project_iam_policy`) | Error |
+| [terraform_forbidden_resources](rules/terraform_forbidden_resources.go) | Forbids use of disallowed `resource` types (currently `google_project_iam_policy`, `google_organization_iam_policy`) | Error |
 
 ### `terraform_sorted_arguments`
 
@@ -39,6 +39,7 @@ Attributes inside a `variable` block must appear in the following order:
 Flags `resource` blocks whose type is on a deny-list. Currently forbidden:
 
 - **`google_project_iam_policy`** — authoritative; replaces the entire IAM policy on a project. Use `google_project_iam_binding` or `google_project_iam_member` instead.
+- **`google_organization_iam_policy`** — authoritative; overwrites the entire IAM policy on an organization (including default policies). Use `google_organization_iam_binding` or `google_organization_iam_member` instead.
 
 This rule has no auto-fix: removing the resource would silently drop infrastructure, so the change must be made deliberately.
 
