@@ -52,6 +52,26 @@ resource "google_project_iam_policy" "foo" {
 			},
 		},
 		{
+			name: "forbidden google_organization_iam_policy",
+			config: `
+resource "google_organization_iam_policy" "foo" {
+  org_id      = "1234"
+  policy_data = "x"
+}
+`,
+			issues: helper.Issues{
+				{
+					Rule:    rule,
+					Message: `resource "google_organization_iam_policy" is forbidden: google_organization_iam_policy is authoritative and overwrites the entire IAM policy on an organization (including default policies); use google_organization_iam_binding or google_organization_iam_member instead`,
+					Range: hcl.Range{
+						Filename: "main.tf",
+						Start:    hcl.Pos{Line: 2, Column: 10},
+						End:      hcl.Pos{Line: 2, Column: 42},
+					},
+				},
+			},
+		},
+		{
 			name: "data source with forbidden name - no issues",
 			config: `
 data "google_project_iam_policy" "foo" {

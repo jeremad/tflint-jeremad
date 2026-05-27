@@ -9,7 +9,8 @@ import (
 )
 
 var forbiddenResources = map[string]string{
-	"google_project_iam_policy": "google_project_iam_policy is authoritative and replaces the entire IAM policy on a project; use google_project_iam_binding or google_project_iam_member instead",
+	"google_project_iam_policy":      "google_project_iam_policy is authoritative and replaces the entire IAM policy on a project; use google_project_iam_binding or google_project_iam_member instead",
+	"google_organization_iam_policy": "google_organization_iam_policy is authoritative and overwrites the entire IAM policy on an organization (including default policies); use google_organization_iam_binding or google_organization_iam_member instead",
 }
 
 type TerraformForbiddenResourcesRule struct {
