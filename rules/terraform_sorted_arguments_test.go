@@ -773,6 +773,140 @@ resource "aws_instance" "web" {
 `,
 		},
 
+		// ── Category 7: ignore_nested_deprecations between blocks and lifecycle ──
+		{
+			name: "ignore_nested_deprecations at bottom with blank line - no issues",
+			config: `
+module "database" {
+  source = "../modules/database"
+
+  name = "db"
+
+  ignore_nested_deprecations = true
+}
+`,
+			issues: helper.Issues{},
+		},
+		{
+			name: "ignore_nested_deprecations after nested block, before lifecycle - no issues",
+			config: `
+module "database" {
+  source = "../modules/database"
+
+  name = "db"
+
+  providers {
+    aws = aws.east
+  }
+
+  ignore_nested_deprecations = true
+
+  depends_on = [aws_vpc.main]
+}
+`,
+			issues: helper.Issues{},
+		},
+		{
+			name: "ignore_nested_deprecations before primitives - category violation",
+			config: `
+module "database" {
+  source = "../modules/database"
+
+  ignore_nested_deprecations = true
+  name                       = "db"
+}
+`,
+			issues: helper.Issues{
+				{
+					Rule: rule,
+					Message: `argument "name" (primitive variable) should come before "ignore_nested_deprecations" (ignore_nested_deprecations meta-argument): ` +
+						orderingHint,
+					Range: hcl.Range{
+						Filename: "main.tf",
+						Start:    hcl.Pos{Line: 6, Column: 3},
+						End:      hcl.Pos{Line: 6, Column: 7},
+					},
+				},
+			},
+			fixed: `
+module "database" {
+  source = "../modules/database"
+
+  name = "db"
+
+  ignore_nested_deprecations = true
+}
+`,
+		},
+		{
+			name: "ignore_nested_deprecations after lifecycle - category violation",
+			config: `
+module "database" {
+  source = "../modules/database"
+
+  name = "db"
+
+  depends_on = [aws_vpc.main]
+
+  ignore_nested_deprecations = true
+}
+`,
+			issues: helper.Issues{
+				{
+					Rule: rule,
+					Message: `argument "ignore_nested_deprecations" (ignore_nested_deprecations meta-argument) should come before "depends_on" (lifecycle meta-argument): ` +
+						orderingHint,
+					Range: hcl.Range{
+						Filename: "main.tf",
+						Start:    hcl.Pos{Line: 9, Column: 3},
+						End:      hcl.Pos{Line: 9, Column: 29},
+					},
+				},
+			},
+			fixed: `
+module "database" {
+  source = "../modules/database"
+
+  name = "db"
+
+  ignore_nested_deprecations = true
+
+  depends_on = [aws_vpc.main]
+}
+`,
+		},
+		{
+			name: "ignore_nested_deprecations without blank line before - blank line violation",
+			config: `
+module "database" {
+  source = "../modules/database"
+
+  name = "db"
+  ignore_nested_deprecations = true
+}
+`,
+			issues: helper.Issues{
+				{
+					Rule:    rule,
+					Message: `missing blank line before "ignore_nested_deprecations" (ignore_nested_deprecations meta-argument)`,
+					Range: hcl.Range{
+						Filename: "main.tf",
+						Start:    hcl.Pos{Line: 6, Column: 3},
+						End:      hcl.Pos{Line: 6, Column: 29},
+					},
+				},
+			},
+			fixed: `
+module "database" {
+  source = "../modules/database"
+
+  name = "db"
+
+  ignore_nested_deprecations = true
+}
+`,
+		},
+
 		// ── Consecutive same-type blocks: grouped without blank line ─────────────
 		{
 			name: "consecutive same-type blocks without blank line - no issues",

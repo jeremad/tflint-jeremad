@@ -19,7 +19,8 @@ import (
 //	3  primitives               bool/number/string scalars, references, function calls
 //	4  complex                  list `[…]` or map `{…}` values
 //	5  nested blocks            HCL sub-blocks (lifecycle/depends_on excluded)
-//	6  lifecycle meta-args      `lifecycle` block, `depends_on`, etc.
+//	6  ignore_nested_deprecations  the `ignore_nested_deprecations` attribute (modules)
+//	7  lifecycle meta-args      `lifecycle` block, `depends_on`, etc.
 const (
 	catProvider      = 0
 	catInstantiation = 1
@@ -27,7 +28,8 @@ const (
 	catPrimitive     = 3
 	catComplex       = 4
 	catBlock         = 5
-	catLifecycle     = 6
+	catIgnoreNested  = 6
+	catLifecycle     = 7
 )
 
 var catLabel = map[int]string{
@@ -37,11 +39,13 @@ var catLabel = map[int]string{
 	catPrimitive:     "primitive variable",
 	catComplex:       "complex variable (list/map)",
 	catBlock:         "nested block",
+	catIgnoreNested:  "ignore_nested_deprecations meta-argument",
 	catLifecycle:     "lifecycle meta-argument",
 }
 
 const orderingHint = "required order: provider → count/for_each → source → " +
-	"primitive variables → complex variables → nested blocks → lifecycle meta-arguments"
+	"primitive variables → complex variables → nested blocks → " +
+	"ignore_nested_deprecations → lifecycle meta-arguments"
 
 // topMetaAttrs maps attribute names to their fixed top-of-block category.
 var topMetaAttrs = map[string]int{
@@ -51,11 +55,12 @@ var topMetaAttrs = map[string]int{
 	"source":   catSource,
 }
 
-// endMetaNames are attribute or block names that always live at the bottom
-// of a block body, in the lifecycle meta-arguments section.
-var endMetaNames = map[string]bool{
-	"depends_on": true,
-	"lifecycle":  true,
+// endMetaNames maps attribute or block names that always live at the bottom
+// of a block body to their fixed end category.
+var endMetaNames = map[string]int{
+	"ignore_nested_deprecations": catIgnoreNested,
+	"depends_on":                 catLifecycle,
+	"lifecycle":                  catLifecycle,
 }
 
 var complexFuncs = map[string]bool{
@@ -72,8 +77,8 @@ func categorizeAttr(name string, expr hclsyntax.Expression) int {
 	if cat, ok := topMetaAttrs[name]; ok {
 		return cat
 	}
-	if endMetaNames[name] {
-		return catLifecycle
+	if cat, ok := endMetaNames[name]; ok {
+		return cat
 	}
 	switch e := expr.(type) {
 	case *hclsyntax.ObjectConsExpr, *hclsyntax.TupleConsExpr, *hclsyntax.ForExpr:
@@ -93,8 +98,8 @@ func categorizeAttr(name string, expr hclsyntax.Expression) int {
 }
 
 func categorizeBlock(blockType string) int {
-	if endMetaNames[blockType] {
-		return catLifecycle
+	if cat, ok := endMetaNames[blockType]; ok {
+		return cat
 	}
 	return catBlock
 }
