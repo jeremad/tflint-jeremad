@@ -24,7 +24,8 @@ Arguments inside a block must appear in the following order, top to bottom:
 4. **Primitive variables** — booleans, numbers, strings, references, function calls; sorted alphabetically within this group
 5. **Complex variables** — lists (`[…]`), maps (`{…}`), `for` expressions, multi-line expressions (heredocs), and calls to complex-producing functions (`compact`, `concat`, `jsonencode`, `merge`, `setsubtract`, `templatefile`, `toset`); sorted alphabetically, each separated from the previous group by a blank line
 6. **Nested blocks** — HCL sub-blocks; separated by a blank line, sorted alphabetically (consecutive blocks of the same type may be grouped without a blank line between them)
-7. **Lifecycle meta-arguments** — `lifecycle`, `depends_on`; each preceded by a blank line
+7. **`ignore_nested_deprecations`** — module meta-argument; preceded by a blank line
+8. **Lifecycle meta-arguments** — `lifecycle`, `depends_on`; each preceded by a blank line
 
 ### `terraform_sorted_variables`
 
